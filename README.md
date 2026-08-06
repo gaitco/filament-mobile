@@ -1,3 +1,5 @@
+![gait/filament-mobile](https://raw.githubusercontent.com/gaitco/filament-mobile/main/art/banner.png)
+
 # gait/filament-mobile
 
 Serves an existing Laravel Filament panel as a mobile admin JSON contract. It
@@ -17,6 +19,8 @@ them — and exposes only the resources you explicitly opt in.
 Every write is authorised through the panel's own policies, and its validation
 rules are extracted from the same schema the read path publishes — so the rules
 a client is shown and the rules the server enforces cannot drift apart.
+
+![How it works](https://raw.githubusercontent.com/gaitco/filament-mobile/main/art/diagram.png)
 
 ---
 
