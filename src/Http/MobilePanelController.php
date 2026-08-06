@@ -1,0 +1,818 @@
+<?php
+
+declare(strict_types=1);
+
+namespace Gait\FilamentMobile\Http;
+
+use Filament\Schemas\Schema;
+use Gait\FilamentMobile\Authorizer;
+use Gait\FilamentMobile\Introspection\FormDefaults;
+use Gait\FilamentMobile\Introspection\HeadlessSchemaHost;
+use Gait\FilamentMobile\Introspection\SchemaWalker;
+use Gait\FilamentMobile\Introspection\WalkWarnings;
+use Gait\FilamentMobile\MobileResource;
+use Gait\FilamentMobile\PanelSchemaBuilder;
+use Gait\FilamentMobile\RecordSerializer;
+use Gait\FilamentMobile\ResourceRegistry;
+use Gait\FilamentMobile\Validation\RuleExtractor;
+use Gait\FilamentMobile\Write\SettledSchema;
+use Gait\FilamentMobile\Write\WritableNames;
+use Illuminate\Contracts\Database\Eloquent\Builder;
+use Illuminate\Database\Eloquent\Model;
+use Illuminate\Http\JsonResponse;
+use Illuminate\Http\Request;
+use Illuminate\Support\Arr;
+use Illuminate\Support\Facades\Log;
+use Throwable;
+
+final class MobilePanelController
+{
+    public function __construct(
+        private readonly PanelSchemaBuilder $builder,
+        private readonly ResourceRegistry $registry,
+    ) {
+    }
+
+    public function schema(Request $request): JsonResponse
+    {
+        $document = $this->builder->build($request->user());
+
+        // Read at request time, not cached at boot: the production test
+        // flips the environment after the app has already booted.
+        if (! app()->environment('production')) {
+            $document['_warnings'] = $this->builder->warnings()->all();
+        }
+
+        return response()->json($document);
+    }
+
+    public function index(Request $request, string $resource): JsonResponse
+    {
+        // Resolution before authorization, deliberately: a resource nobody
+        // serves is a 404 for everyone, and a 403 is never the answer for
+        // something that does not exist.
+        [$class, $mobile] = $this->registry->findByKey($resource)
+            ?? abort(404, "No mobile resource [{$resource}].");
+
+        // Filament's semantics, not a raw Gate::authorize(): a model with no
+        // policy is visible on the phone exactly as it is on the web panel.
+        abort_unless(
+            Authorizer::allows($request->user(), 'viewAny', $class::getModel()),
+            403,
+        );
+
+        $card = $mobile->getCard();
+
+        // The resource's own query, never the model's: global scopes, soft
+        // deletes and tenancy are inherited rather than reimplemented here.
+        $query = $class::getEloquentQuery()
+            // Derived from the card's dotted paths, so the N+1 defence needs
+            // no declaration and cannot drift from what is serialised.
+            ->with($card->relationPaths());
+
+        $this->applySearch($query, $this->stringQuery($request, 'search'), $mobile->getSearchable());
+        $this->applySort($query, $request, $mobile);
+
+        $records = $query->paginate(config('filament-mobile.per_page'));
+
+        $serializer = new RecordSerializer($card, (new ($class::getModel())())->getRouteKeyName());
+
+        return response()->json([
+            'data' => array_map(
+                static fn (Model $record): array => $serializer->serialize($record),
+                $records->items(),
+            ),
+            'meta' => [
+                'current_page' => $records->currentPage(),
+                'last_page' => $records->lastPage(),
+                'per_page' => $records->perPage(),
+                'total' => $records->total(),
+            ],
+        ]);
+    }
+
+    public function store(Request $request, string $resource): JsonResponse
+    {
+        // Same order as index()/show(), for the same reason: a resource
+        // nobody serves is a 404 for everyone, and a 403 is never the answer
+        // for something that does not exist.
+        [$class, $mobile] = $this->registry->findByKey($resource)
+            ?? abort(404, "No mobile resource [{$resource}].");
+
+        // Class-level, not per-record: there is no record yet. See
+        // Authorizer::allows() vs allowsRecord().
+        abort_unless(
+            Authorizer::allows($request->user(), 'create', $class::getModel()),
+            403,
+        );
+
+        // The validated array is also the mass-assignment whitelist: only a
+        // key the form declares a rule for survives $request->validate(), so
+        // an undeclared field (e.g. `internal_note`) never reaches create().
+        //
+        // Built through SettledSchema, not from the payload: a gate reading a
+        // sibling the form will never write (`Hidden`, unmapped, `file`) would
+        // otherwise be opened by crafting that sibling's value. See
+        // SettledSchema and WritableNames.
+        $settled = SettledSchema::settle(
+            submitted: $request->all(),
+            // The panel's own defaults are the trusted state on create: there
+            // is no record yet, and FormDefaults computes exactly what
+            // Filament's CreateRecord would fill.
+            //
+            // From an EMPTY state, never the submitted one, and that is the
+            // whole guard. `trusted` is not merely a reset target: reset()
+            // seeds EVERY pass's state from it and it is never re-derived, so
+            // anything landing in it is a permanent floor the final build
+            // reads — and row defaults come off that build. Deriving it from
+            // the payload therefore let a crafted value open a `visible` gate,
+            // plant that component's default in `trusted`, and have it open a
+            // second gate on every later pass. Two hops, and a column the
+            // panel would never have written gets one. See `lever` /
+            // `victim_note` in BannerResource.
+            //
+            // An empty state is also exactly what Filament's own CreateRecord
+            // fills defaults into, so this is the closer match either way.
+            trusted: FormDefaults::fromComponents(
+                $this->formComponents($class, [], record: null),
+            ),
+            build: function (array $state) use ($class): array {
+                $components = $this->formComponents($class, $state, record: null);
+
+                return ['components' => $components, 'writable' => WritableNames::of($components)];
+            },
+        );
+
+        $components = $settled->components();
+
+        $validated = $request->validate(
+            $this->allowedRules($settled),
+            attributes: $this->validationAttributes($settled),
+        );
+
+        $model = $class::getModel();
+
+        // Under the payload, never over it: the form's `->default()` values are
+        // what Filament's own CreateRecord fills before saving, so a mobile
+        // create that ignores them writes a row the web panel would not have.
+        // A `Hidden::make('type')->default(...)` — the ordinary way a resource
+        // stamps a record as its own — is invisible to the client by
+        // definition, so only the server can supply it. See FormDefaults.
+        $record = $model::create($this->fillMissingPaths(
+            $validated,
+            FormDefaults::fromComponents($components),
+        ));
+
+        $serializer = new RecordSerializer($mobile->getCard(), $record->getRouteKeyName());
+
+        return response()->json(['data' => $serializer->serialize($record)], 201);
+    }
+
+    public function show(Request $request, string $resource, string $id): JsonResponse
+    {
+        // Same order as index(), for the same reason: a resource nobody serves
+        // is a 404 for everyone, and a 403 is never the answer for something
+        // that does not exist.
+        [$class, $mobile] = $this->registry->findByKey($resource)
+            ?? abort(404, "No mobile resource [{$resource}].");
+
+        // The same gate index() and /schema apply, and for the same reason:
+        // Filament authorizes *every* resource page — ViewRecord included —
+        // on Resource::canAccess(), which is canViewAny(). Gating the detail
+        // endpoint on the record's `view` alone makes mobile looser than the
+        // web panel wherever `view()` does not delegate to `viewAny()`, which
+        // is the ordinary shape of an ownership policy.
+        abort_unless(
+            Authorizer::allows($request->user(), 'viewAny', $class::getModel()),
+            403,
+        );
+
+        $model = new ($class::getModel())();
+
+        // Through the resource's query, so a record a global scope, a soft
+        // delete or a tenant boundary hides is a genuine 404 — never a 403,
+        // which would confirm the row exists.
+        // ponytail: no ->with(). Eager loading is the N+1 defence for a *page*
+        // of records; for one record it trades a lazy load for an identical
+        // extra query and buys nothing.
+        $record = $class::getEloquentQuery()
+            ->where($model->qualifyColumn($model->getRouteKeyName()), $id)
+            ->first()
+            ?? abort(404, "No [{$resource}] record [{$id}].");
+
+        $user = $request->user();
+
+        // Against the loaded record, never the class: this is the per-record
+        // half of the permissions contract. See Authorizer::allowsRecord().
+        $mayView = Authorizer::allowsRecord($user, 'view', $record);
+
+        abort_unless($mayView, 403);
+
+        $attributes = $record->attributesToArray();
+
+        // Two path sets, deliberately not merged. An infolist entry named
+        // `caption` and a form field named `caption.ar` are different things
+        // sharing one JSON key: nesting the second replaces the first, and the
+        // endpoint answered `{"caption": {"ar": null}}` for exactly that
+        // reason. The infolist keeps its nesting; the form gets literal keys.
+        $serializer = (new RecordSerializer($mobile->getCard(), $model->getRouteKeyName()))
+            ->withInfolistPaths($this->infolistPaths($class, $resource, $attributes))
+            ->withFormPaths($this->formPaths($class, $resource, $attributes, $record));
+
+        return response()->json([
+            'data' => $serializer->serialize($record),
+            // The resource-level block in /schema reports capability, because
+            // an ownership policy has no class-level answer. This one is the
+            // truth for this row, and the two are free to disagree.
+            'permissions' => [
+                'view' => $mayView,
+                'update' => Authorizer::allowsRecord($user, 'update', $record),
+                'delete' => Authorizer::allowsRecord($user, 'delete', $record),
+            ],
+        ]);
+    }
+
+    public function update(Request $request, string $resource, string $id): JsonResponse
+    {
+        // Same order as show(): resource resolution (404) before record lookup
+        // (404) before the Gate (403) — a resource or record nobody serves must
+        // never leak its existence through a 403.
+        [$class, $mobile] = $this->registry->findByKey($resource)
+            ?? abort(404, "No mobile resource [{$resource}].");
+
+        $model = new ($class::getModel())();
+
+        // Through the resource's query, so a record a global scope, a soft
+        // delete or a tenant boundary hides is a genuine 404 — never a 403,
+        // which would confirm the row exists.
+        $record = $class::getEloquentQuery()
+            ->where($model->qualifyColumn($model->getRouteKeyName()), $id)
+            ->first()
+            ?? abort(404, "No [{$resource}] record [{$id}].");
+
+        // Against the loaded record, never the class: update is authorization,
+        // not capability. An ownership policy's class-level answer is `true`
+        // for every record — see Authorizer::allows() vs allowsRecord().
+        abort_unless(
+            Authorizer::allowsRecord($request->user(), 'update', $record),
+            403,
+        );
+
+        // The validated array is also the mass-assignment whitelist: only a
+        // key the form declares a rule for survives $request->validate(), so
+        // an undeclared field never reaches update().
+        //
+        // The record's stored values sit under the payload: a partial PUT that
+        // does not resend `country_id` must still resolve a field whose
+        // visibility depends on it, or the field loses its rules and its
+        // submitted value is silently dropped.
+        //
+        // `attributesToArray()`, not `getAttributes()`: Filament's own
+        // EditRecord fills the form from the cast values, so a JSON, enum or
+        // date column must drive a closure here exactly as it does on the web
+        // panel. Raw column values are a divergence this package exists to
+        // avoid.
+        // Through SettledSchema, for the reason store() is: a gate reading a
+        // sibling this form will never write is a gate the payload can open.
+        $settled = SettledSchema::settle(
+            submitted: [...$record->attributesToArray(), ...$request->all()],
+            trusted: $record->attributesToArray(),
+            // The record, not just its attributes: state alone answers
+            // `Get $get`, but `disabled(fn (Model $record) => ...)` and
+            // `disabledOn('edit')` need the schema to know which row this is
+            // and that this is an edit. Without it every such gate evaluated
+            // as a create, i.e. open.
+            build: function (array $state) use ($class, $record): array {
+                $components = $this->formComponents($class, $state, $record);
+
+                return ['components' => $components, 'writable' => WritableNames::of($components)];
+            },
+        );
+
+        $rules = $this->allowedRules($settled);
+
+        $validated = $request->validate(
+            $rules,
+            attributes: $this->validationAttributes($settled),
+        );
+
+        // A dotted rule path (`caption.en`) validates into a nested array, and
+        // Eloquent writes the WHOLE `caption` attribute — so a PUT carrying one
+        // locale erases every sibling the payload did not mention. That is not
+        // a translation edge case: any locale the form marks Hidden, disabled,
+        // disabledOn('edit') or dehydration-refused is absent from every
+        // payload by construction, so its stored value was lost on every save.
+        // The record's own value fills the gaps, path by path — same helper the
+        // defaults use on create, so the two can't drift.
+        $record->update($this->fillMissingPaths(
+            $validated,
+            $this->storedPaths($record, array_keys($rules)),
+        ));
+
+        $serializer = new RecordSerializer($mobile->getCard(), $record->getRouteKeyName());
+
+        return response()->json(['data' => $serializer->serialize($record)]);
+    }
+
+    public function destroy(Request $request, string $resource, string $id): JsonResponse
+    {
+        // Same order as show()/update(): resource resolution (404) before
+        // record lookup (404) before the Gate (403) — a resource or record
+        // nobody serves must never leak its existence through a 403.
+        [$class, ] = $this->registry->findByKey($resource)
+            ?? abort(404, "No mobile resource [{$resource}].");
+
+        $model = new ($class::getModel())();
+
+        // Through the resource's query, so a record a global scope, a soft
+        // delete or a tenant boundary hides is a genuine 404 — never a 403,
+        // which would confirm the row exists.
+        $record = $class::getEloquentQuery()
+            ->where($model->qualifyColumn($model->getRouteKeyName()), $id)
+            ->first()
+            ?? abort(404, "No [{$resource}] record [{$id}].");
+
+        // Against the loaded record, never the class: delete is
+        // authorization, not capability. An ownership policy's class-level
+        // answer is `true` for every record — see Authorizer::allows() vs
+        // allowsRecord().
+        abort_unless(
+            Authorizer::allowsRecord($request->user(), 'delete', $record),
+            403,
+        );
+
+        // The model's delete, NOT Filament's DeleteAction — a known delta, so
+        // it is documented rather than silently different. `DeleteAction` is a
+        // Livewire construct this package deliberately does not host, so its
+        // `before()`/`after()` hooks and its restrict-if-related-records guard
+        // do not run here. Everything hanging off `$record->delete()` does:
+        // observers, soft deletes, cascades, and the policy already checked
+        // above. The pilot measured 1 of 33 resources relying on a hook (it
+        // retires a WhatsApp template in Meta, which a mobile delete leaves
+        // live) — the fix for such a resource is an observer, which both
+        // panels then honour.
+        $record->delete();
+
+        return response()->json(null, 204);
+    }
+
+    /**
+     * The settled schema's rules, narrowed to the names the settle actually
+     * allowed — which is the mass-assignment whitelist, so this is the one
+     * place both write endpoints decide what may reach the database.
+     *
+     * The intersection is not belt-and-braces. The returned components are the
+     * FINAL pass's, built from state whose non-writable paths were already
+     * reset, so that build can report a name the allow-set dropped on an
+     * earlier pass: `dehydrated(fn (?string $state) => filled($state))` refuses
+     * the submitted `''`, the reset restores the stored value, and the next
+     * build then says "writable" — about a value the client never sent. Taking
+     * the rules off the build alone lets it through, and the column lands NULL
+     * (ConvertEmptyStringsToNull got the `''` first). See
+     * SettledSchema::writable().
+     *
+     * ponytail: the converse is a known, accepted residual — shrink-only can
+     * discard a legitimate write behind a 200. Stored `kind='unlock'` opens
+     * `gate_note`; the client PUTs `{"kind":"promo","gate_note":"..."}`. Pass 1
+     * drops `gate_note` (the submitted `kind` closes it), the reset restores
+     * the stored `kind='unlock'`, pass 2 reports it writable again, and
+     * shrink-only refuses — 200 OK, typing silently discarded. Reachability is
+     * low: `kind` is a Hidden, so a client can never learn it and must invent a
+     * contradicting value for a name it was never shown. The upgrade path is a
+     * per-field refusal report in the response, which is a contract change, not
+     * a fix here.
+     *
+     * @return array<string, mixed>
+     */
+    private function allowedRules(SettledSchema $settled): array
+    {
+        return array_intersect_key(
+            RuleExtractor::fromComponents($settled->components()),
+            array_flip($settled->writable()),
+        );
+    }
+
+    /**
+     * `:attribute` for the rules above, so the 422 names the field the way
+     * `/schema`'s published `rules.messages` already does.
+     *
+     * Both come from the field's `getValidationAttribute()` — Filament's own
+     * label-aware attribute, which is what the web panel shows. Without this
+     * the validator falls back to the humanised column name and the two
+     * describe the same rule with two different nouns. The pilot measured
+     * the disagreement on 137 of 187 constrained fields, and on 148 of 187
+     * once the panel's locale was Arabic, where the 422 read
+     * "title.ar مطلوب" against a published "الاسم (عربي) مطلوب".
+     *
+     * Intersected with the same allow-set as the rules: an attribute for a
+     * name no rule mentions is inert, but leaving it in would make this method
+     * and allowedRules() disagree about which fields exist.
+     *
+     * @return array<string, string>
+     */
+    private function validationAttributes(SettledSchema $settled): array
+    {
+        return array_intersect_key(
+            RuleExtractor::attributesFrom($settled->components()),
+            array_flip($settled->writable()),
+        );
+    }
+
+    /**
+     * The one way this package merges anything into a payload: path by path,
+     * writing only what the payload does not already answer for.
+     *
+     * Never array_replace_recursive() and never a spread. PHP has no array
+     * merge that is correct for both halves of what arrives here: a spread
+     * replaces a whole `caption` map, dropping the locales the payload did not
+     * send, and array_replace_recursive() merges LISTS BY INDEX — a default of
+     * `['a','b','c']` under a submitted `['c']` stores `['c','b','c']`, a
+     * silent corruption of the user's own choice. Trading one for the other is
+     * how this bug came back twice.
+     *
+     * `Arr::has()` is the whole discrimination, and it is per path: the payload
+     * answers for `caption.en` but not `caption.ar`, and it answers for
+     * `plain_multi` as one indivisible value. An explicitly submitted null is
+     * an answer — Arr::has() reads key presence, not truthiness — so a client
+     * may still clear a field that has a default.
+     *
+     * @param  array<string, mixed>  $payload
+     * @param  array<string, mixed>  $paths  flat `path => value`
+     * @return array<string, mixed>
+     */
+    private function fillMissingPaths(array $payload, array $paths): array
+    {
+        foreach ($paths as $path => $value) {
+            if (Arr::has($payload, $path) || $this->collidesWithScalar($payload, $path)) {
+                continue;
+            }
+
+            data_set($payload, $path, $value);
+        }
+
+        return $payload;
+    }
+
+    /**
+     * Whether an ancestor of this path is already answered by a NON-array
+     * value — `caption` submitted as text while a `caption.ar` default waits to
+     * be filled in underneath it.
+     *
+     * `data_set` would replace that text with `['ar' => ...]`, i.e. the default
+     * beating the user's own input, which no merge here may ever do. The
+     * payload wins: it has answered for the whole attribute, so there is
+     * nothing left underneath it to fill.
+     *
+     * This is the WRITE half of the `title` / `title.ar` collision spec §9
+     * records on the serializer, and it is not resolved here: a panel naming
+     * both a scalar and its dotted children still gets only one of the two
+     * shapes. That is a P3 contract task. This only decides which one loses —
+     * the default, never the submission.
+     */
+    private function collidesWithScalar(array $payload, string $path): bool
+    {
+        $segments = explode('.', $path);
+        array_pop($segments);
+        $prefix = '';
+
+        foreach ($segments as $segment) {
+            $prefix = $prefix === '' ? $segment : "{$prefix}.{$segment}";
+
+            if (Arr::has($payload, $prefix) && ! is_array(Arr::get($payload, $prefix))) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * The record's stored values for the attributes a dotted rule path names,
+     * flattened to the same flat `path => value` shape FormDefaults returns.
+     *
+     * Only those attributes: an undotted path writes its attribute whole, so
+     * there is nothing to preserve underneath it, and re-listing every column
+     * would put values the form never mentioned into the update array.
+     *
+     * A list stays a leaf. Descending into one would reintroduce exactly the
+     * merge-by-index corruption fillMissingPaths() exists to refuse.
+     *
+     * @param  list<string>  $paths
+     * @return array<string, mixed>
+     */
+    private function storedPaths(Model $record, array $paths): array
+    {
+        $stored = [];
+
+        foreach ($paths as $path) {
+            if (! str_contains($path, '.')) {
+                continue;
+            }
+
+            $attribute = explode('.', $path, 2)[0];
+            $value = $record->getAttribute($attribute);
+
+            if (is_array($value)) {
+                $stored = [...$stored, ...$this->leafPaths([$attribute => $value])];
+            }
+        }
+
+        return $stored;
+    }
+
+    /**
+     * @param  array<array-key, mixed>  $values
+     * @return array<string, mixed>
+     */
+    private function leafPaths(array $values, string $prefix = ''): array
+    {
+        $paths = [];
+
+        foreach ($values as $key => $value) {
+            $path = $prefix === '' ? (string) $key : "{$prefix}.{$key}";
+
+            if (is_array($value) && $value !== [] && ! array_is_list($value)) {
+                $paths = [...$paths, ...$this->leafPaths($value, $path)];
+
+                continue;
+            }
+
+            $paths[$path] = $value;
+        }
+
+        return $paths;
+    }
+
+    /**
+     * The form as it stands for these values — the one place the write path
+     * builds a schema, so store() and update() cannot drift apart on which
+     * fields exist.
+     *
+     * The host is seeded with the submitted values, not left empty, because
+     * `getComponents()` filters hidden components and a hidden field yields no
+     * rule: extracting against an empty form would silently drop the value of
+     * every field a `visible(fn (Get $get) => ...)` closure reveals. It also
+     * cannot be a null host — `Schema::make()` accepts one, but the first such
+     * closure then fatals inside `isHidden()` on `Schema::getLivewire()`, whose
+     * return type is not nullable: a 500 on every write to a reactive form.
+     *
+     * The record is what makes this differ between store() and update(), and
+     * it carries both halves: `Schema::record()` *is* `model()`, and the
+     * operation is derived from it rather than passed separately, so the two
+     * can never disagree about which one this is.
+     *
+     * ponytail: accepted residual — plain `getComponents()`, not
+     * `getComponents(withHidden: true)` the way StateController's read side
+     * calls it. A top-level `->hidden()->dehydratedWhenHidden()` field
+     * genuinely IS writable (`isDehydrated()` only excludes a field that is
+     * hidden and NOT re-dehydrated-when-hidden), but this call drops it before
+     * SettledSchema or WritableNames ever sees it, so it silently never
+     * writes even though `/state` — which does pass `withHidden: true` —
+     * reports it writable. Exotic shape; the honest fix is passing
+     * `withHidden: true` on this path too, not a filter over on `/state`.
+     *
+     * @param  class-string  $class
+     * @param  array<string, mixed>  $state
+     * @return list<object>
+     */
+    private function formComponents(string $class, array $state, ?Model $record): array
+    {
+        return $class::form($this->formSchema(
+            $class,
+            $state,
+            $record === null ? 'create' : 'edit',
+            $record,
+        ))->getComponents();
+    }
+
+    /**
+     * The one Schema construction every endpoint here goes through.
+     *
+     * `Schema::make()` accepts a null host, but that is what makes any
+     * `visible(fn (Get $get) => ...)` fatal inside `isHidden()` — see
+     * formComponents() above.
+     *
+     * `->model()` is what Filament's own resource pages set. Without it a
+     * `Select::relationship()` resolves no options at all (`getRelationship()`
+     * reaches for the schema's model instance and fails on null), so a required
+     * foreign key arrives at the phone as an empty picker and every write to
+     * that resource 422s on a field the client had no legal value for.
+     *
+     * `->operation()` is not optional either, and nothing in this package set
+     * it until review found the hole. `Schema::getOperation()` falls through to
+     * `getLivewire()::class` when unset — here, `HeadlessSchemaHost` — which
+     * matches neither `'create'`/`'edit'` nor the `instanceof` branch inside
+     * `disabledOn()`/`hiddenOn()`/`visibleOn()`. **Every** operation-scoped
+     * gate therefore evaluated false, and `disabledOn('edit')` is *the*
+     * idiomatic immutable-after-create gate: slug, sku, email, type.
+     *
+     * `$record` is passed only where there genuinely is one. It is what makes
+     * `disabled(fn (?Model $record) => ...)` answer for the row being edited
+     * instead of answering as a create, and a non-nullable `Model $record`
+     * hint stop throwing.
+     *
+     * @param  class-string  $class
+     * @param  array<string, mixed>  $state
+     */
+    private function formSchema(string $class, array $state, string $operation, ?Model $record = null): Schema
+    {
+        return Schema::make($this->host($state))
+            ->model($record ?? $class::getModel())
+            ->operation($operation);
+    }
+
+    /**
+     * @param  array<string, mixed>  $state
+     */
+    private function host(array $state): HeadlessSchemaHost
+    {
+        $host = new HeadlessSchemaHost();
+        $host->setMobileState($state);
+
+        return $host;
+    }
+
+    /**
+     * Every attribute path the resource's infolist names, flattened out of the
+     * walked tree — the same walk /schema publishes, so the detail payload
+     * cannot drift from the detail screen the client was told to render.
+     * Layout nodes (the ones carrying children) name a section, not a column.
+     *
+     * Built through the same host the write path uses, seeded with this
+     * record's cast values: an infolist entry may be conditional too, and a
+     * null host fatals on the first one — silently, because the catch below
+     * turns it into a fallback to the card's fields.
+     *
+     * @param  class-string  $class
+     * @param  array<string, mixed>  $state
+     * @return list<string>
+     */
+    private function infolistPaths(string $class, string $resourceKey, array $state): array
+    {
+        $walker = new SchemaWalker(new WalkWarnings());
+
+        try {
+            // `operation: 'view'`, and deliberately NO record, even though one
+            // is in hand two lines up in show().
+            //
+            // Passing it would resolve `infolist(fn (Order $record) => ...)`,
+            // which is the exact construction hazard the catch below exists to
+            // survive — and BrokenSchemaTest's last case is the only test of
+            // the silent-fallback-plus-log path. Handing the record over here
+            // would make that fixture construct cleanly and delete the coverage
+            // without a single test turning red. The record-typed closure stays
+            // unresolvable on this path on purpose.
+            //
+            // The cost is bounded and read-only: infolistPaths() decides which
+            // columns get serialised, never what gets written, and it already
+            // falls back to the card's fields. Every write path does get the
+            // record — see formComponents().
+            $components = $class::infolist($this->formSchema($class, $state, 'view'))
+                ->getComponents();
+        } catch (Throwable $e) {
+            // Same construction-time hazard /schema guards against: a closure
+            // typed against the record fatals when getComponents() evaluates it
+            // without one. The record still serialises — it falls back to the
+            // card's fields, which is a thinner detail screen rather than a 500.
+            //
+            // The response has nowhere to carry a warning, but degrading a
+            // detail screen without recording it anywhere is how this becomes
+            // a bug report nobody can reproduce. /schema names the resource in
+            // its warnings; this leaves the same fact in the log.
+            Log::warning('[filament-mobile] could not build the infolist schema for '
+                . class_basename($class) . ', falling back to card fields only: '
+                . $e->getMessage());
+
+            return [];
+        }
+
+        return $this->leafNames($walker->walk($components, class_basename($class), $resourceKey));
+    }
+
+    /**
+     * The form's leaf field names, for serialising a record the edit screen
+     * will prefill.
+     *
+     * Unlike infolistPaths(), this DOES pass the record: formComponents()
+     * already does so on every write path, and an edit form that resolves its
+     * gates as a create is the defect Task 6 of P2-Laravel closed. The
+     * try/catch mirrors infolistPaths(): a throwing form costs the prefill,
+     * not the whole detail screen.
+     *
+     * @param  class-string  $class
+     * @param  array<string, mixed>  $state
+     * @return list<string>
+     */
+    private function formPaths(string $class, string $resourceKey, array $state, Model $record): array
+    {
+        $walker = new SchemaWalker(new WalkWarnings());
+
+        try {
+            $components = $this->formComponents($class, $state, $record);
+        } catch (Throwable $e) {
+            Log::warning('[filament-mobile] could not build the form schema for '
+                . class_basename($class) . ', the edit form will open unprefilled: '
+                . $e->getMessage());
+
+            return [];
+        }
+
+        return $this->leafNames($walker->walk($components, class_basename($class), $resourceKey));
+    }
+
+    /**
+     * @param  list<array<string, mixed>>  $nodes
+     * @return list<string>
+     */
+    private function leafNames(array $nodes): array
+    {
+        $names = [];
+
+        foreach ($nodes as $node) {
+            if (isset($node['children'])) {
+                $names = [...$names, ...$this->leafNames($node['children'])];
+
+                continue;
+            }
+
+            if (is_string($node['name'] ?? null)) {
+                $names[] = $node['name'];
+            }
+        }
+
+        return $names;
+    }
+
+    /**
+     * The one place a query parameter becomes a PHP value. `?sort[]=x` binds an
+     * array, and every scalar string function below would fatal on it — a 500
+     * for input a client fully controls. Non-strings are rejected with the same
+     * 422 the sort path already promises, and an empty value is read as absent
+     * (`?sort=` is an ordinary way to say "no sort", not an unknown key).
+     */
+    private function stringQuery(Request $request, string $key): ?string
+    {
+        $value = $request->query($key);
+
+        abort_if($value !== null && ! is_string($value), 422, "[{$key}] must be a string.");
+
+        return ($value === null || $value === '') ? null : $value;
+    }
+
+    /** @param list<string> $columns */
+    private function applySearch(Builder $query, ?string $search, array $columns): void
+    {
+        if ($search === null || $columns === []) {
+            return;
+        }
+
+        // `%` and `_` are LIKE metacharacters: unescaped, `?search=%` matches
+        // every row and the filter stops filtering. The ESCAPE clause is
+        // explicit because SQLite — unlike MySQL and Postgres — has no default
+        // escape character.
+        //
+        // The escape character is `!`, not the conventional backslash. MySQL
+        // treats a backslash as an escape *inside string literals*, so the
+        // clause `escape '\'` is an unterminated literal and every search
+        // request is a 1064 syntax error — which SQLite, where the package's
+        // tests run, parses happily as a literal backslash. Writing `escape
+        // '\\'` would fix MySQL and break SQLite, which reads it as a
+        // two-character escape string and rejects it. `!` needs no escaping in
+        // a string literal on any of the three drivers, so one clause is
+        // correct everywhere.
+        $term = '%' . str_replace(['!', '%', '_'], ['!!', '!%', '!_'], $search) . '%';
+
+        // One where group, not a chain of top-level orWheres: a bare orWhere
+        // would escape any scope the resource query already applied and widen
+        // the result set past it.
+        // ponytail: plain columns only. A dotted searchable() would need
+        // whereHas — add it the day a resource declares one.
+        $query->where(function (Builder $group) use ($term, $columns): void {
+            foreach ($columns as $column) {
+                $group->orWhereRaw(
+                    $group->getGrammar()->wrap($column) . " like ? escape '!'",
+                    [$term],
+                );
+            }
+        });
+    }
+
+    private function applySort(Builder $query, Request $request, MobileResource $mobile): void
+    {
+        $requested = $this->stringQuery($request, 'sort');
+        $key = $requested ?? $mobile->getDefaultSortKey();
+
+        if ($key === null) {
+            return;
+        }
+
+        // An undeclared key is an error, never a silently ignored parameter:
+        // a client sorting by a column that does not exist must find out.
+        abort_unless(array_key_exists($key, $mobile->getSorts()), 422, "Unknown sort key [{$key}].");
+
+        $direction = $this->stringQuery($request, 'direction')
+            ?? ($key === $mobile->getDefaultSortKey() ? $mobile->getDefaultSortDirection() : 'asc');
+
+        $query->orderBy($key, strtolower($direction) === 'desc' ? 'desc' : 'asc');
+    }
+}
