@@ -74,11 +74,20 @@ it('does not claim every URI ending in /schema — only the configured prefix', 
     $this->getJson('/graphql/schema')->assertNotFound();
 });
 
-it('publishes a multi-valued relationship select as disabled', function () {
-    // The write path never calls saveRelationships(), so this field returns
-    // 201 having attached nothing. Publishing it editable invites a user to
-    // fill a control whose contents are silently discarded.
+it('publishes a multi-valued relationship select as editable', function () {
+    // The write path saves it through the relation pass
+    // (MobilePanelController::saveRelations()), so the lock that used to
+    // keep this honest is gone with the gap it covered — see
+    // RelationWriteTest for the write-side half of this contract.
     $node = findFormNode(schemaFor('banners'), 'tag_ids');
+
+    expect($node['disabled'])->toBeFalse();
+});
+
+it('still publishes a DISABLED relationship select as disabled', function () {
+    // savesViaRelationship() exempts a field from the dehydration lock, not
+    // from its own disabled gate.
+    $node = findFormNode(schemaFor('banners'), 'gated_tag_ids');
 
     expect($node['disabled'])->toBeTrue();
 });
@@ -99,23 +108,21 @@ it('leaves a plain multiple select editable', function () {
     expect($node['disabled'])->toBeFalse();
 });
 
-it('publishes a CheckboxList relationship as disabled, the one real class with no isMultiple()', function () {
+it('publishes a CheckboxList relationship as editable, the one real class with no isMultiple()', function () {
     // CheckboxList is inherently multi-valued and, like the singular
     // relationship container below, has no isMultiple() to ask. It is named
-    // explicitly by class in isMultiValuedRelationship() rather than assumed
-    // from the absent method.
+    // explicitly by class in savesViaRelationship() rather than assumed
+    // from the absent method — and that classification now means "saved by
+    // the relation pass", hence editable.
     //
-    // The fixture's `->dehydrated()` is load-bearing: CheckboxList::relationship()
-    // also calls dehydrated(false) unconditionally, so without overriding it
-    // back to true this field would be locked by the pre-existing
-    // dehydrated-literal check regardless of the class-name branch — double
-    // covered exactly like the Section below, and this assertion would pass
-    // for the wrong reason. With the override, this is the one wired
-    // assertion that actually depends on isMultiValuedRelationship() naming
-    // CheckboxList by class.
+    // The fixture's `->dehydrated()` override remains load-bearing, from
+    // the other side: without the relation carve-out in RuleExtractor this
+    // dehydrated(true) field would gain a rule and reach update() as a
+    // nonexistent COLUMN. RelationWriteTest's checkbox case is the write
+    // half of that proof.
     $node = findFormNode(schemaFor('banners'), 'checkbox_tag_ids');
 
-    expect($node['disabled'])->toBeTrue();
+    expect($node['disabled'])->toBeFalse();
 });
 
 /**

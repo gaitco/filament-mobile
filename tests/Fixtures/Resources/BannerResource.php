@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Gait\FilamentMobile\Tests\Fixtures\Resources;
 
+use Filament\Actions\Action;
 use Filament\Forms\Components\CheckboxList;
 use Filament\Forms\Components\FileUpload;
 use Filament\Forms\Components\Hidden;
@@ -15,10 +16,14 @@ use Filament\Resources\Resource;
 use Filament\Schemas\Components\Section;
 use Filament\Schemas\Components\Utilities\Get;
 use Filament\Schemas\Schema;
+use Filament\Support\Exceptions\Cancel;
+use Filament\Support\Exceptions\Halt;
+use Filament\Tables\Table;
 use Gait\FilamentMobile\MobileCard;
 use Gait\FilamentMobile\MobileResource;
 use Gait\FilamentMobile\Tests\Fixtures\Models\Banner;
 use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Support\HtmlString;
 use RuntimeException;
 use UnitEnum;
 
@@ -40,7 +45,17 @@ class BannerResource extends Resource
                 ->meta('created_at', format: 'date'))
             ->searchable(['name'])
             ->sorts(['created_at' => 'Newest', 'name' => 'Name'])
-            ->defaultSort('created_at', 'desc');
+            ->defaultSort('created_at', 'desc')
+            ->actions([
+                'approve', 'archive', 'publish', 'reject', 'explode', 'halting',
+                // Presentation getters that throw — ActionResolver::serialise()
+                // must degrade the field, not drop the action or 500 the row.
+                'throwing_label', 'throwing_confirmation',
+                // failure() without halt, Cancel, and Htmlable presentation.
+                'failing', 'cancelling', 'html_label',
+                // Resolves nowhere — the doctor case.
+                'ghost',
+            ]);
     }
 
     /**
@@ -52,6 +67,92 @@ class BannerResource extends Resource
     public static function getEloquentQuery(): Builder
     {
         return parent::getEloquentQuery()->whereNull('deleted_at');
+    }
+
+    public static function table(Table $table): Table
+    {
+        return $table->recordActions([
+            Action::make('approve')
+                ->label('Approve')
+                ->color('success')
+                ->icon('heroicon-o-check')
+                ->successNotificationTitle('Banner approved')
+                // The one action gated behind a real, policy-shaped check:
+                // Banner otherwise carries no policy, and RunActionTest needs
+                // a record the user may VIEW but may not RUN this action on
+                // — the action's own isAuthorized() is a gate distinct from
+                // the resource-level viewAny() the endpoint also checks.
+                // Narrowest possible: denies only the fixture's 'viewer'
+                // user, nobody else.
+                ->authorize(fn () => auth()->user()?->name !== 'viewer')
+                ->action(fn (Banner $record) => $record->update(['status' => 'approved'])),
+            // Confirmation travels: the phone must reproduce the web
+            // panel's "are you sure", with the action's own strings.
+            Action::make('archive')
+                ->label('Archive')
+                ->color('danger')
+                ->requiresConfirmation()
+                ->modalHeading('Archive this banner?')
+                ->modalDescription('It will stop being served.')
+                ->action(fn (Banner $record) => $record->update(['status' => 'archived'])),
+            // Hidden for this record: must be absent from the payload AND
+            // refused by the endpoint, not merely greyed out.
+            Action::make('publish')
+                ->visible(fn (Banner $record): bool => $record->status === 'draft')
+                ->action(fn (Banner $record) => $record->update(['status' => 'active'])),
+            // Carries a form: omitted from the wire, reported by doctor.
+            Action::make('reject')
+                ->schema([TextInput::make('reason')->required()])
+                ->action(fn () => null),
+            // A closure that throws — the endpoint must answer 500 rather
+            // than report a success it cannot vouch for.
+            Action::make('explode')
+                ->action(fn () => throw new RuntimeException('boom')),
+            // Halts deliberately: a 422 with the failure title.
+            Action::make('halting')
+                ->failureNotificationTitle('Cannot do that yet')
+                ->action(fn () => throw new Halt()),
+            // A cosmetic getter that throws. The action itself is fine —
+            // authorized, visible, form-free — so it must stay RUNNABLE:
+            // serialise() degrades `label` to the action's own name rather
+            // than dropping the action or 500ing the whole record.
+            Action::make('throwing_label')
+                ->label(fn () => throw new RuntimeException('label boom'))
+                ->action(fn () => null),
+            // Reports failure WITHOUT halting: the closure returns normally
+            // after `$action->failure()`. Filament's own web path switches on
+            // getStatus() after the call and shows the FAILURE notification —
+            // the mutation before it is real and stays. Mobile must answer
+            // 422 with the failure title, not a 200 with the success one.
+            Action::make('failing')
+                ->failureNotificationTitle('Could not fail politely')
+                ->action(function (Action $action, Banner $record): void {
+                    $record->update(['status' => 'poked']);
+                    $action->failure();
+                }),
+            // Cancels: the web panel catches Cancel and sends NO notification
+            // at all — a graceful no-op, not a fault. Mobile answers 200 with
+            // no message.
+            Action::make('cancelling')
+                ->action(fn () => throw new Cancel()),
+            // Htmlable presentation: rendered HTML has no meaning on a phone,
+            // so text() answers null — which must degrade the label to the
+            // machine name (never a blank button) and the modal heading to
+            // the generic prompt (never an empty heading).
+            Action::make('html_label')
+                ->label(new HtmlString('<b>Bold</b>'))
+                ->requiresConfirmation()
+                ->modalHeading(new HtmlString('<b>Sure?</b>'))
+                ->action(fn () => null),
+            // A safety-relevant getter that throws. Unlike the label above,
+            // guessing "no confirmation" here would run a destructive action
+            // with no prompt — serialise() must fail CLOSED: a non-null
+            // confirmation block with the package's generic fallback.
+            Action::make('throwing_confirmation')
+                ->requiresConfirmation()
+                ->modalHeading(fn () => throw new RuntimeException('heading boom'))
+                ->action(fn () => null),
+        ]);
     }
 
     public static function form(Schema $schema): Schema
@@ -156,6 +257,12 @@ class BannerResource extends Resource
                 Select::make('tag_ids')
                     ->multiple()
                     ->relationship('tags', 'name'),
+                // Disabled relation select: submitted ids must neither attach
+                // nor degrade into a clearing sync — fail closed, both ways.
+                Select::make('gated_tag_ids')
+                    ->multiple()
+                    ->relationship('tags', 'name')
+                    ->disabled(),
                 // The control group for the field above: multiplicity alone
                 // is not the refusal, the RELATIONSHIP is. A plain multiple
                 // select over static options writes fine.

@@ -99,3 +99,15 @@ it('records searchable columns in declaration order', function () {
     expect(MobileResource::make()->searchable(['name', 'slug'])->getSearchable())
         ->toBe(['name', 'slug']);
 });
+
+it('declares no actions by default', function () {
+    expect(MobileResource::make()->getActions())->toBe([]);
+});
+
+it('keeps declared action names in declaration order, de-duplicated and re-indexed', function () {
+    // Order is the publication order the client renders buttons in, so it is
+    // part of the contract, not an accident of the array.
+    $resource = MobileResource::make()->actions(['approve', 'archive', 'approve']);
+
+    expect($resource->getActions())->toBe(['approve', 'archive']);
+});

@@ -4,7 +4,12 @@ declare(strict_types=1);
 
 namespace Gait\FilamentMobile\Http;
 
+use Filament\Actions\Action;
+use Filament\Actions\Enums\ActionStatus;
 use Filament\Schemas\Schema;
+use Filament\Support\Exceptions\Cancel;
+use Filament\Support\Exceptions\Halt;
+use Gait\FilamentMobile\Actions\ActionResolver;
 use Gait\FilamentMobile\Authorizer;
 use Gait\FilamentMobile\Introspection\FormDefaults;
 use Gait\FilamentMobile\Introspection\HeadlessSchemaHost;
@@ -163,6 +168,8 @@ final class MobilePanelController
             FormDefaults::fromComponents($components),
         ));
 
+        $this->saveRelations($class, $settled->state(), $record, 'create', $request->all());
+
         $serializer = new RecordSerializer($mobile->getCard(), $record->getRouteKeyName());
 
         return response()->json(['data' => $serializer->serialize($record)], 201);
@@ -219,6 +226,8 @@ final class MobilePanelController
             ->withInfolistPaths($this->infolistPaths($class, $resource, $attributes))
             ->withFormPaths($this->formPaths($class, $resource, $attributes, $record));
 
+        $resolver = new ActionResolver($class, $mobile);
+
         return response()->json([
             'data' => $serializer->serialize($record),
             // The resource-level block in /schema reports capability, because
@@ -229,16 +238,155 @@ final class MobilePanelController
                 'update' => Authorizer::allowsRecord($user, 'update', $record),
                 'delete' => Authorizer::allowsRecord($user, 'delete', $record),
             ],
+            // Per-record, like `permissions` and for the same reason: an
+            // action's visibility and authorization are facts about THIS row.
+            // Absent means unavailable — this package does not publish dead
+            // controls. Always present, `[]` when the resource opted none in.
+            'actions' => array_values(array_map(
+                fn ($action) => $resolver->serialise($action),
+                $resolver->available($record),
+            )),
         ]);
+    }
+
+    /**
+     * Run one opted-in, form-free record action — what a tap on the web
+     * panel's row button does, minus the modal. A known, documented delta,
+     * like destroy()'s DeleteAction one: this is the action's bare `call()`,
+     * so its `before()`/`after()` hooks (`callBefore()`/`callAfter()`) and
+     * any declared `->databaseTransaction()` do not run here — those live in
+     * Filament's Livewire mounting flow, which this package deliberately
+     * does not host. Everything inside the action closure itself does run,
+     * and the resolver has already re-answered visibility and authorization.
+     * An action relying on `before()` for a side effect the mobile tap must
+     * also produce should move that work into the closure or an observer,
+     * which both panels then honour.
+     *
+     * Resolution order is every other endpoint's, show() included: resource
+     * 404 → viewAny 403 → record 404 → action gate 403. The page-level gate
+     * runs BEFORE the record lookup, not after: a caller with no access to
+     * the resource type at all must get the same 403 for a real id and a
+     * nonexistent one, or the status code itself becomes an oracle for which
+     * ids exist on a resource the caller cannot see — exactly the enumeration
+     * leak show()'s own ordering exists to close.
+     *
+     * The action gate proper is `ActionResolver::resolve()`, re-answered here
+     * against the record as it stands NOW, because the payload that listed
+     * this action was a hint and may be stale or crafted. Every refusal past
+     * this point is the same 403: distinguishing "not opted in" from "hidden
+     * for this row" would leak the panel's configuration to a client that
+     * guessed a name.
+     *
+     * The response carries no record body. An action's most common effect is
+     * changing exactly the permissions and actions the client is holding, so
+     * the client re-fetches the record and gets all three fresh together.
+     */
+    public function runAction(Request $request, string $resource, string $id, string $action): JsonResponse
+    {
+        [$class, $mobile] = $this->registry->findByKey($resource)
+            ?? abort(404, "No mobile resource [{$resource}].");
+
+        // Before the record lookup, as show() applies it: an action is
+        // reachable only on a resource the user may reach at all, and asking
+        // this before the record exists is what keeps a real id and a fake
+        // one answering identically.
+        abort_unless(
+            Authorizer::allows($request->user(), 'viewAny', $class::getModel()),
+            403,
+        );
+
+        $model = new ($class::getModel())();
+
+        $record = $class::getEloquentQuery()
+            ->where($model->qualifyColumn($model->getRouteKeyName()), $id)
+            ->first()
+            ?? abort(404, "No [{$resource}] record [{$id}].");
+
+        $resolved = (new ActionResolver($class, $mobile))->resolve($action, $record)
+            ?? abort(403);
+
+        try {
+            $resolved->call();
+        } catch (Halt) {
+            // Filament's own "stop, and tell the user why" path. A halt is a
+            // refusal the action chose, not a server fault: 422, with the
+            // action's own failure title when it declared one.
+            return response()->json(
+                ['message' => $this->notificationTitle($resolved, 'getFailureNotificationTitle')],
+                422,
+            );
+        } catch (Cancel) {
+            // The web panel's other graceful exit: it catches Cancel and
+            // sends NO notification at all — a no-op the action chose, not a
+            // fault and not a refusal. 200 with no message, matching that
+            // silence; the client re-fetches and moves on.
+            return response()->json(['message' => null]);
+        }
+
+        // The call returned normally, but that is only half of Filament's
+        // answer: the web panel switches on getStatus() after the call, and
+        // a closure that ran `$this->failure()` gets the FAILURE
+        // notification there. The same 422-with-failure-title as a Halt —
+        // and like a Halt's, the closure's side effects up to the failure()
+        // are real and stand; the status is a report, not a rollback.
+        if ($resolved->getStatus() === ActionStatus::Failure) {
+            return response()->json(
+                ['message' => $this->notificationTitle($resolved, 'getFailureNotificationTitle')],
+                422,
+            );
+        }
+
+        // The action has already run by this point — its side effect is
+        // real regardless of what happens next. A throwing title is
+        // therefore cosmetic, not a reason to report the request as failed:
+        // that would tell the client an action succeeded, mutated the
+        // record, and then have the client believe it didn't and possibly
+        // retry it. Degrades to null, same as ActionResolver::serialise()'s
+        // label/color/icon getters; the client falls back to its own
+        // generic string.
+        return response()->json(['message' => $this->notificationTitle($resolved, 'getSuccessNotificationTitle')]);
+    }
+
+    /**
+     * `getSuccessNotificationTitle()` / `getFailureNotificationTitle()` can
+     * be closures, and by the time either is read the action has already
+     * run — its side effect is real regardless of what this getter does.
+     * A throwing title is therefore cosmetic, not an action failure:
+     * reporting one as a 500 would tell a client whose mutation genuinely
+     * went through (or genuinely halted) that the request failed, inviting
+     * a retry of an action that already ran once. Degrades to `null`, the
+     * same ruling `ActionResolver::serialise()` already applies to a
+     * throwing label/color/icon — the client falls back to its own generic
+     * string.
+     *
+     * @param  'getSuccessNotificationTitle'|'getFailureNotificationTitle'  $getter
+     */
+    private function notificationTitle(Action $action, string $getter): ?string
+    {
+        try {
+            return $action->{$getter}();
+        } catch (Throwable) {
+            return null;
+        }
     }
 
     public function update(Request $request, string $resource, string $id): JsonResponse
     {
-        // Same order as show(): resource resolution (404) before record lookup
-        // (404) before the Gate (403) — a resource or record nobody serves must
-        // never leak its existence through a 403.
+        // Same order as show() and runAction(): resource 404 → viewAny 403 →
+        // record 404 → record gate 403 — a resource or record nobody serves
+        // must never leak its existence through a 403.
         [$class, $mobile] = $this->registry->findByKey($resource)
             ?? abort(404, "No mobile resource [{$resource}].");
+
+        // BEFORE the record lookup, for the same two reasons show() gives:
+        // Filament gates every resource page — Edit included — on
+        // canAccess(), i.e. viewAny; and a caller denied at the resource
+        // level must get the same 403 for a real id and a fake one, or the
+        // status code becomes an oracle for which ids exist.
+        abort_unless(
+            Authorizer::allows($request->user(), 'viewAny', $class::getModel()),
+            403,
+        );
 
         $model = new ($class::getModel())();
 
@@ -309,6 +457,8 @@ final class MobilePanelController
             $this->storedPaths($record, array_keys($rules)),
         ));
 
+        $this->saveRelations($class, $settled->state(), $record, 'edit', $request->all());
+
         $serializer = new RecordSerializer($mobile->getCard(), $record->getRouteKeyName());
 
         return response()->json(['data' => $serializer->serialize($record)]);
@@ -316,11 +466,19 @@ final class MobilePanelController
 
     public function destroy(Request $request, string $resource, string $id): JsonResponse
     {
-        // Same order as show()/update(): resource resolution (404) before
-        // record lookup (404) before the Gate (403) — a resource or record
-        // nobody serves must never leak its existence through a 403.
+        // Same order as show()/update(): resource 404 → viewAny 403 → record
+        // 404 → record gate 403 — a resource or record nobody serves must
+        // never leak its existence through a 403.
         [$class, ] = $this->registry->findByKey($resource)
             ?? abort(404, "No mobile resource [{$resource}].");
+
+        // BEFORE the record lookup — see update() for both reasons: web
+        // fidelity (every Filament page gates on viewAny) and the
+        // enumeration guard (identical 403 for a real and a fake id).
+        abort_unless(
+            Authorizer::allows($request->user(), 'viewAny', $class::getModel()),
+            403,
+        );
 
         $model = new ($class::getModel())();
 
@@ -575,6 +733,50 @@ final class MobilePanelController
      * @param  array<string, mixed>  $state
      * @return list<object>
      */
+    /**
+     * The relation pass: what Filament's own CreateRecord/EditRecord run as
+     * `$this->form->model($record)->saveRelationships()` after the attribute
+     * save. A `Select::multiple()->relationship()` has no column — this is
+     * its only way into the database.
+     *
+     * Rebuilt from the SETTLED state rather than reusing the settle's own
+     * components, because store()'s settle ran before the record existed and
+     * `BelongsToModel::saveRelationships()` refuses without an existing
+     * record. The state is the settled one, so every gate the rebuild
+     * answers is evaluated against values no crafted payload could have
+     * steered — same property the validation pass relies on.
+     *
+     * The `Arr::has($payload, ...)` guard is the difference between absent
+     * and empty, and it is load-bearing: a relation the request never
+     * mentioned is not in the settled state (a BelongsToMany is not an
+     * attribute, so the trusted floor never carries it), and syncing that
+     * absence would CLEAR a pivot the user never touched. Explicit `[]`
+     * stays a deliberate clear.
+     *
+     * The disabled refusal lives in the descent (relationWriteComponents),
+     * fail closed — a disabled picker's crafted ids neither attach nor
+     * degrade into a clearing sync. A sync that genuinely throws propagates:
+     * turning it into a 200 would be the silent data loss this package
+     * refuses everywhere else.
+     *
+     * @param  array<string, mixed>  $state  the settled state
+     * @param  array<string, mixed>  $payload  the raw request payload
+     */
+    private function saveRelations(string $class, array $state, Model $record, string $operation, array $payload): void
+    {
+        $components = $class::form(
+            $this->formSchema($class, $state, $operation, $record),
+        )->getComponents();
+
+        foreach (RuleExtractor::relationWriteComponents($components) as $name => $component) {
+            if (! Arr::has($payload, $name)) {
+                continue;
+            }
+
+            $component->saveRelationships();
+        }
+    }
+
     private function formComponents(string $class, array $state, ?Model $record): array
     {
         return $class::form($this->formSchema(

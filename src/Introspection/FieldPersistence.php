@@ -54,6 +54,17 @@ final class FieldPersistence
     }
 
     /**
+     * The disabled half of refuses() alone — for a component that
+     * savesViaRelationship(), whose dehydration is false BY DESIGN and must
+     * not count against it, while a disabled gate (or one that throws)
+     * still refuses, fail closed.
+     */
+    public static function refusesDisabled(object $component): bool
+    {
+        return self::refusedBy($component, 'isDisabled', true);
+    }
+
+    /**
      * "Would this component be refused no matter what the client types?"
      *
      * The publishable half of refuses(). /schema derived `disabled` from
@@ -94,8 +105,11 @@ final class FieldPersistence
      */
     public static function neverPersists(object $component): bool
     {
-        if (self::isMultiValuedRelationship($component)) {
-            return true;
+        if (self::savesViaRelationship($component)) {
+            // Saved through saveRelationships() on the write path — editable,
+            // whatever its dehydration says: Select::multiple()->relationship()
+            // compiles dehydrated() to a closure that is false by design.
+            return false;
         }
 
         if (! method_exists($component, 'isDehydrated')) {
@@ -114,11 +128,11 @@ final class FieldPersistence
     }
 
     /**
-     * A multi-valued relationship field can never be written.
-     *
-     * MobilePanelController writes with Model::create()/$record->update() and
-     * never calls Filament's saveRelationships(), so a multiple relationship
-     * select returns 201 having attached nothing.
+     * A multi-valued relationship field — saved by the controller's
+     * relation pass (`saveRelationships()`), never through the model's
+     * attributes. RuleExtractor withholds its rule so it can never enter
+     * mass assignment, and WritableNames admits its name so the settle
+     * does not strip the submitted ids before the relation pass reads them.
      *
      * This is a fact about the component, answered through Filament's public
      * API — unlike a dehydration CLOSURE, which resolves false for reasons
@@ -149,7 +163,7 @@ final class FieldPersistence
      * test would silently readmit the very data-loss case this method exists
      * to catch. Component identity does not have that gap.
      */
-    private static function isMultiValuedRelationship(object $component): bool
+    public static function savesViaRelationship(object $component): bool
     {
         if (! method_exists($component, 'getRelationship')) {
             return false;

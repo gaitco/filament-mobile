@@ -42,6 +42,24 @@ it('404s before authorizing, so a missing resource never leaks a 403', function 
         ->assertNotFound();
 });
 
+it('answers the same status on update for a real and a nonexistent record when the resource itself is denied', function () {
+    // Same enumeration guard runAction() carries, on the same fixture:
+    // PostPolicy denies `viewAny` to 'restricted'. Without the page-level
+    // gate before the record lookup, a real id answered 403 (the record
+    // gate) and a fake one 404 — the status code itself an oracle for which
+    // ids exist on a resource the caller cannot see.
+    $post = seedPost('Gated update');
+    $user = makeUser('restricted');
+
+    $this->actingAs($user)
+        ->putJson("/api/mobile-panel/posts/{$post->id}", ['title' => 'x'])
+        ->assertForbidden();
+
+    $this->actingAs($user)
+        ->putJson('/api/mobile-panel/posts/999999', ['title' => 'x'])
+        ->assertForbidden();
+});
+
 it('ignores a key the form does not declare', function () {
     $this->actingAs(makeUser('admin'))
         ->postJson('/api/mobile-panel/banners', [

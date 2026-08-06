@@ -23,8 +23,10 @@ use Livewire\Component;
  * `skipRender()` — Livewire\Component members. Hence the `extends`.
  *
  * Nothing renders, mounts or hydrates this component; it is a state bag with
- * the right shape. It is one of exactly two files in `src/` permitted to
- * reference Livewire, enforced by `tests/Unit/ArchitectureTest.php`.
+ * the right shape. It is one of exactly three files in `src/` permitted to
+ * reference Livewire, enforced by `tests/Unit/ArchitectureTest.php` —
+ * alongside `Console/DoctorCommand.php` and
+ * `Introspection/HeadlessTableHost.php`.
  */
 // `AllowDynamicProperties` is for the deprecation notice only. State is seeded
 // as properties named after each field's state path, which cannot be declared

@@ -44,6 +44,25 @@ it('reports a card field whose relation does not exist on the model', function (
         ->expectsOutputToContain('ghost');
 });
 
+it('reports an action name that resolves nowhere', function () {
+    // BannerResource declares 'ghost' among actions(); no table action
+    // answers to it. Assert the ActionResolver::problems() wording exactly
+    // ("no such action") rather than bare 'ghost' — DriftResource's own
+    // unresolvable card path (`ghost.name`) already puts that substring in
+    // the output, which would make a bare-substring assertion pass before
+    // this feature exists at all.
+    $this->artisan('filament-mobile:doctor')
+        ->expectsOutputToContain('ghost: no such action')
+        ->assertExitCode(1);
+});
+
+it('reports an opted-in action that carries a form', function () {
+    // BannerResource's 'reject' table action declares a schema.
+    $this->artisan('filament-mobile:doctor')
+        ->expectsOutputToContain('carries a form')
+        ->assertExitCode(1);
+});
+
 it('exits zero when nothing actionable is found', function () {
     config()->set('filament-mobile.resources', [PostResource::class]);
 

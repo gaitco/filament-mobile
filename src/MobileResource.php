@@ -29,6 +29,9 @@ final class MobileResource
 
     private string $defaultSortDirection = 'asc';
 
+    /** @var list<string> */
+    private array $actions = [];
+
     private function __construct()
     {
         $this->card = MobileCard::make();
@@ -100,6 +103,22 @@ final class MobileResource
         return $this;
     }
 
+    /**
+     * Names of record actions the resource's own `table()` defines, opted in
+     * for mobile. The package never constructs an action: this says WHICH,
+     * Filament says WHAT. A name that resolves nowhere — or resolves to an
+     * action carrying a form — is omitted from the wire and reported by
+     * `filament-mobile:doctor`.
+     *
+     * @param  list<string>  $names
+     */
+    public function actions(array $names): self
+    {
+        $this->actions = array_values(array_unique($names));
+
+        return $this;
+    }
+
     public function getCard(): MobileCard
     {
         return $this->card;
@@ -125,6 +144,12 @@ final class MobileResource
     public function getDefaultSortDirection(): string
     {
         return $this->defaultSortDirection;
+    }
+
+    /** @return list<string> */
+    public function getActions(): array
+    {
+        return $this->actions;
     }
 
     /**

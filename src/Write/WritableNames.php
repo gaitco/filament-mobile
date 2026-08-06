@@ -33,6 +33,17 @@ final class WritableNames
         // key with a rule survives $request->validate() and reaches create()
         // or update(). Reusing it is what keeps "trusted to steer a gate" and
         // "allowed to be written" from ever drifting apart.
-        return array_keys(RuleExtractor::fromComponents($components));
+        //
+        // Relation-write names are the second door into the database: their
+        // ids reach it through saveRelationships(), not the payload, so they
+        // carry no rule — but they ARE persisted, and a persisted name is a
+        // legitimate steering name. Without them the settle resets a
+        // submitted picker to the trusted floor, and the relation pass reads
+        // an empty state where the user's choice was. Disabled ones are
+        // already excluded, fail closed, inside the descent.
+        return array_values(array_unique([
+            ...array_keys(RuleExtractor::fromComponents($components)),
+            ...array_keys(RuleExtractor::relationWriteComponents($components)),
+        ]));
     }
 }

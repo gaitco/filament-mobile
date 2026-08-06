@@ -9,6 +9,8 @@ use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 
 class Tag extends Model
 {
+    public $timestamps = false;
+
     protected $guarded = [];
 
     /** @return BelongsToMany<Banner, $this> */

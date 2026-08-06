@@ -6,6 +6,7 @@ namespace Gait\FilamentMobile\Console;
 
 use Filament\Tables\Table;
 use Filament\Tables\TableComponent;
+use Gait\FilamentMobile\Actions\ActionResolver;
 use Gait\FilamentMobile\MobileResource;
 use Gait\FilamentMobile\PanelSchemaBuilder;
 use Gait\FilamentMobile\ResourceRegistry;
@@ -57,15 +58,18 @@ final class DoctorCommand extends Command
         $unsupported = $this->unsupported($builder);
         $drift = $this->drift($mobile, $unsupported);
         $unresolvable = $this->unresolvableCardPaths($mobile);
+        $actionProblems = $this->actionProblems($mobile);
 
         $this->exposure($registry, $mobile, $panel);
         $this->section('Unsupported components', [...$unsupported, ...$this->pasteLines($unsupported)]);
         $this->section('Drift between mobile() and table()', [...$drift['actionable'], ...$drift['ignored']]);
         $this->section('Unresolvable card field paths', $unresolvable);
+        $this->section('Actions', $actionProblems);
 
         // A resource nobody could walk is a hole in the gate, not a clean bill
         // of health: CI reads the exit code, not the prose above it.
-        $actionable = count($unsupported) + count($drift['actionable']) + count($this->skipped($registry, $mobile, $panel));
+        $actionable = count($unsupported) + count($drift['actionable'])
+            + count($actionProblems) + count($this->skipped($registry, $mobile, $panel));
 
         $this->newLine();
         $this->line($actionable === 0
@@ -333,6 +337,29 @@ final class DoctorCommand extends Command
 
                 $lines[] = class_basename($class) . ': `' . $path . '` — `' . $segment
                     . '` is not a relation or attribute on ' . class_basename($model);
+            }
+        }
+
+        return $lines;
+    }
+
+    /**
+     * Section 5. Action declarations that will never reach a phone: a name
+     * that resolves to no table action (typo) or one whose action carries a
+     * form (unsupported this slice). Actionable, not ignorable — either way
+     * the action is silently absent from the payload, which is exactly the
+     * failure mode this command exists to make loud.
+     *
+     * @param  array<class-string, MobileResource>  $mobile
+     * @return list<string>
+     */
+    private function actionProblems(array $mobile): array
+    {
+        $lines = [];
+
+        foreach ($mobile as $class => $resource) {
+            foreach ((new ActionResolver($class, $resource))->problems() as $problem) {
+                $lines[] = class_basename($class) . '.' . $problem;
             }
         }
 

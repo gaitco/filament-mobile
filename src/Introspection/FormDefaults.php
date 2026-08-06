@@ -73,6 +73,16 @@ final class FormDefaults
             return [];
         }
 
+        // A relation-write field's default has no column to land in — it
+        // would enter create()'s fill as a nonexistent attribute. Its saved
+        // path is the controller's relation pass, which reads submitted
+        // state, not defaults. ponytail: a relation select's ->default()
+        // therefore does not pre-attach on create; add to the relation pass
+        // if a panel shows it mattering.
+        if (FieldPersistence::savesViaRelationship($component)) {
+            return [];
+        }
+
         if ($type !== null && in_array($type, ComponentTypeMap::LAYOUT_TYPES, true)) {
             return self::fromComponents(ChildComponents::of($component));
         }

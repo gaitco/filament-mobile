@@ -163,6 +163,86 @@ fields the infolist names.
 | `sorts(array $labels)` | `['column' => 'Label']`; the key is spent on the database |
 | `defaultSort(string $key, string $direction = 'asc')` | Must be one of the declared `sorts()` keys |
 
+## Actions
+
+A resource opts specific **table** record actions into the mobile API by
+name. The package never builds an action of its own — declaring
+`->actions([...])` says WHICH of the resource's own `table()` actions travel
+to a phone; the real `Filament\Actions\Action` object still decides label,
+color, icon, confirmation, authorization, and what the closure does.
+
+```php
+MobileResource::make()
+    ->card(...)
+    ->actions(['approve', 'archive'])
+```
+
+Names are de-duplicated and travel in declaration order. Each must resolve
+to a record action the resource's `table()` already defines (record actions
+nested in a group are found too — the search is flat). Two things never
+reach a phone, both reported by `filament-mobile:doctor` with a non-zero
+exit rather than failing silently:
+
+- a name that resolves to nothing — a typo, or an action that lives only on
+  the resource's page rather than its table;
+- a name that resolves to an action carrying a form — modal-form actions are
+  not supported this slice, so the action is omitted from the wire rather
+  than shipped half-working.
+
+A `table()` doctor cannot even build headlessly (outside Livewire) is
+reported the same way — actionable, non-zero. None of this breaks `/schema`
+or the record endpoints; a misconfigured action is simply absent, the same
+degrade every other closure in this package gets.
+
+### On the record payload
+
+`GET /{resource}/{record}` gains `actions`, a sibling of `permissions`:
+evaluated per record, so an action hidden or unauthorized for THIS row is
+not in the list — no disabled button, the same rule `permissions` already
+follows. Always present, `[]` when the resource opted none in. See
+`contract/README.md` for the exact node shape.
+
+A throwing label, color, or icon closure degrades only that field — label
+falls back to the action's own machine name, color/icon to `null` — and the
+action stays in the list and stays runnable: a cosmetic failure must not
+cost a capability. A throwing visibility or authorization closure omits the
+action entirely, same as every other gate in this package. A throwing
+confirmation closure is the one exception that fails **closed**: the action
+still carries a non-null `confirmation`, with a generic heading and empty
+`submit`/`cancel`, so nothing can be tricked into running promptless — see
+`contract/README.md` for what a client must do with an empty
+`submit`/`cancel`.
+
+### Running one
+
+```
+POST /api/mobile-panel/{resource}/{record}/actions/{action}
+```
+
+Resolution order matches every other endpoint: resource 404 → `viewAny` 403
+→ record 404 → the action's own gate, 403. Every refusal — unopted,
+unresolved, form-carrying, hidden, unauthorized — is the same bodyless 403,
+so a probing client cannot tell which reason it hit. The published `actions`
+array on the record is a **hint**; this endpoint re-answers the gate against
+the record as it stands at call time, never trusting what it last
+published.
+
+| Status | Meaning |
+|---|---|
+| `200 {"message": string\|null}` | The action ran. `message` is its own success notification title, when it declared one. |
+| `422 {"message": string\|null}` | The action halted (`$action->halt()` / Filament's failure-notification path). `message` is its failure title. |
+| `500` | The action's own closure threw. Never reported as a success — an action that half-ran must not tell the client it finished. |
+
+The response carries no record body. The client re-fetches: an action's
+most common effect is exactly what `permissions` and `actions` report, so
+the re-fetch refreshes both.
+
+### Not supported this slice
+
+Actions with modal forms, bulk actions, page-level (header) actions, action
+groups, and list-card actions. Row actions declared on the resource's
+`table()` are the whole surface.
+
 ## Authorization
 
 The panel's existing policies are the only permission model — there is no
@@ -236,16 +316,15 @@ Measured against a real 35-resource production panel.
   external side effect, so a mobile delete skips it). If a
   resource depends on an action hook, move that logic to an observer and both
   panels get it.
-- **A multi-valued relationship field can never be written from mobile.** The
-  write path is `Model::create()`/`$record->update()` on the validated array; it
-  never calls Filament's `saveRelationships()`. So a `Select::multiple()
-  ->relationship()` or a `CheckboxList->relationship()` returns `201`/`200`
-  having attached nothing, and — because Filament resolves those fields'
-  dehydration through a closure, which is indistinguishable through the public
-  API from a legitimate `dehydrated(fn ($state) => filled($state))` — the field
-  is still published as `disabled: false`. A client will render it editable. A
-  single-valued `Select::relationship()` is fine: it writes a foreign key like
-  any other column. Relation writes are P3.
+- **Multi-valued relationship fields sync, with one deliberate asymmetry.**
+  `Select::multiple()->relationship()` and `CheckboxList->relationship()` are
+  saved through Filament's own `saveRelationships()` after the attribute
+  write. A key **absent** from the payload leaves the pivot untouched; an
+  explicit `[]` clears it — absence is not emptiness, so a partial PUT never
+  wipes a relation it did not mention. A disabled relation field refuses
+  both ways: crafted ids neither attach nor degrade into a clearing sync.
+  Singular relationship **containers** (`Section::make()->relationship()`)
+  are still not saved and stay published `disabled: true`.
 - **Dates are ISO-8601 UTC.** The panel's display format does not travel.
 - **`filters` is always `[]`.** Table filters are not introspected.
 - **Tabs are flattened to sections** — deliberately; tabs are a poor phone

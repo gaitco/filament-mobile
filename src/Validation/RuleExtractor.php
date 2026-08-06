@@ -27,7 +27,34 @@ final class RuleExtractor
      */
     public static function fromComponents(iterable $components): array
     {
-        return array_map(self::rulesFor(...), self::leavesOf($components));
+        // Relation-write components are leaves but never rules: their value
+        // reaches the database through saveRelationships(), and a rule here
+        // would put the name into the validated payload — the mass-assignment
+        // whitelist — where an update() writes it as a COLUMN that does not
+        // exist. The CheckboxList fixture (`->relationship()->dehydrated()`)
+        // is the reachable case: dehydration alone would admit it.
+        return array_map(self::rulesFor(...), array_filter(
+            self::leavesOf($components),
+            static fn (object $component): bool => ! FieldPersistence::savesViaRelationship($component),
+        ));
+    }
+
+    /**
+     * The relation-write leaves — the components the controller's relation
+     * pass saves — off the SAME descent as the rules, so "has no rule" and
+     * "is saved as a relation" cannot drift apart. Disabled ones (and ones
+     * whose disabled gate throws) are already dropped by the descent's
+     * fail-closed refusal.
+     *
+     * @param  iterable<mixed>  $components
+     * @return array<string, object>
+     */
+    public static function relationWriteComponents(iterable $components): array
+    {
+        return array_filter(
+            self::leavesOf($components),
+            FieldPersistence::savesViaRelationship(...),
+        );
     }
 
     /**
@@ -192,6 +219,13 @@ final class RuleExtractor
      */
     private static function isNotSaved(object $component): bool
     {
+        // A relation-write component's dehydration is false BY DESIGN —
+        // Filament saves it through saveRelationships(), not the payload —
+        // so only its disabled gate may refuse it, fail closed as ever.
+        if (FieldPersistence::savesViaRelationship($component)) {
+            return FieldPersistence::refusesDisabled($component);
+        }
+
         return FieldPersistence::refuses($component);
     }
 

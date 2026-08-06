@@ -29,6 +29,12 @@ Route::prefix(config('filament-mobile.prefix'))
         // Above {resource}/{record} so a POST cannot be shadowed by it.
         Route::post('{resource}', [MobilePanelController::class, 'store'])->name('store');
         Route::get('{resource}', [MobilePanelController::class, 'index'])->name('index');
+        // Placed here for consistency with `state`/`options` above, though
+        // unlike those two this route has no actual competitor: it is a
+        // four-segment POST, and nothing else registered matches that shape
+        // regardless of ordering.
+        Route::post('{resource}/{record}/actions/{action}', [MobilePanelController::class, 'runAction'])
+            ->name('run-action');
         Route::get('{resource}/{record}', [MobilePanelController::class, 'show'])->name('show');
         Route::put('{resource}/{record}', [MobilePanelController::class, 'update'])->name('update');
         Route::delete('{resource}/{record}', [MobilePanelController::class, 'destroy'])->name('destroy');
