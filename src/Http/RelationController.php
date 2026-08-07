@@ -113,7 +113,23 @@ final class RelationController
             ->with($card->relationPaths())
             ->paginate(config('filament-mobile.per_page'));
 
-        $serializer = new RecordSerializer($card, $related->getRouteKeyName());
+        // The child's OWN resource, not this one: a column's shape is declared
+        // by the resource that writes it (a `TagsInput->separator(',')` stores
+        // a delimited string — see TagSeparators), and that is `BannerResource`
+        // for a banner, whichever company happens to list it. Fix round 2 of
+        // P7 Task 3: this seam passed nothing, on the wrong reasoning that a
+        // relation "has no form", and published `"a,b"` where every other seam
+        // published `["a","b"]` — reachable without a hand-declared card,
+        // because RelationCard derives one from the manager's columns.
+        //
+        // Null when no mobile resource serves the child model or when several
+        // do, and null is the pre-existing behaviour (the raw stored value).
+        // See ResourceRegistry::findByModel().
+        $serializer = new RecordSerializer(
+            $card,
+            $related->getRouteKeyName(),
+            $this->registry->findByModel($related::class),
+        );
 
         return response()->json([
             'data' => array_map(

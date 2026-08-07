@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Gait\FilamentMobile;
 
 use Gait\FilamentMobile\Introspection\RichContent;
+use Gait\FilamentMobile\Introspection\TagSeparators;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Arr;
 
@@ -27,9 +28,26 @@ final class RecordSerializer
     /** @var list<string> */
     private array $richPaths = [];
 
+    /**
+     * Resolved once per instance, on first use — `index()` serialises a whole
+     * page through one serializer and must not rebuild the resource's form per
+     * record. Null means "not resolved yet", `[]` means "resolved, none".
+     *
+     * @var array<string, string>|null
+     */
+    private ?array $tagSeparators = null;
+
+    /**
+     * @param  class-string|null  $resourceClass  the resource whose form owns
+     *                                            this record's field shapes.
+     *                                            Null for a related record
+     *                                            (RelationController), which
+     *                                            has a card but no form.
+     */
     public function __construct(
         private readonly MobileCard $card,
         private readonly string $recordKey,
+        private readonly ?string $resourceClass = null,
     ) {
     }
 
@@ -164,7 +182,25 @@ final class RecordSerializer
             $payload["{$path}.__rich"] = $envelope;
         }
 
-        return $payload;
+        // LAST, and here rather than in a controller, for the reason the
+        // `__rich` sibling above is produced here: every endpoint serialises
+        // through this class, so this is the only place `index()` and `show()`
+        // cannot disagree about the same column. A separator-configured
+        // TagsInput stores the panel's delimited string (see TagSeparators,
+        // whose dehydrate() is the write half), and the contract says the wire
+        // value is a List<String> in EVERY case — which is only true if every
+        // seam that publishes the column splits it. It was wired at show()
+        // alone in the first cut of P7 Task 3, and a card listing such a field
+        // published `"a,b"` from index() and `["a","b"]` from show().
+        return TagSeparators::hydrate($payload, $this->tagSeparators());
+    }
+
+    /** @return array<string, string> */
+    private function tagSeparators(): array
+    {
+        return $this->tagSeparators ??= $this->resourceClass === null
+            ? []
+            : TagSeparators::forResource($this->resourceClass);
     }
 
     /**

@@ -23,7 +23,7 @@ final class RuleExtractor
 {
     /**
      * @param  iterable<mixed>  $components
-     * @return array<string, list<string>>
+     * @return array<string, list<mixed>>
      */
     public static function fromComponents(iterable $components): array
     {
@@ -34,7 +34,7 @@ final class RuleExtractor
         // exist. The CheckboxList fixture (`->relationship()->dehydrated()`)
         // is the reachable case: dehydration alone would admit it.
         return array_map(
-            static fn (array $entry): array => self::rulesFor($entry['component']),
+            static fn (array $entry): array => self::rulesFor($entry),
             array_filter(
                 self::leavesOf($components),
                 static fn (array $entry): bool => ! FieldPersistence::savesViaRelationship($entry['component']),
@@ -162,7 +162,7 @@ final class RuleExtractor
      * caller re-derives from the name string afterwards.
      *
      * @param  iterable<mixed>  $components
-     * @return array<string, array{component: object, writable: bool}>
+     * @return array<string, array{component: object, writable: bool, rules?: list<mixed>}>
      */
     private static function leavesOf(iterable $components): array
     {
@@ -189,7 +189,7 @@ final class RuleExtractor
     }
 
     /**
-     * @return array<string, array{component: object, writable: bool}>
+     * @return array<string, array{component: object, writable: bool, rules?: list<mixed>}>
      */
     private static function childrenOf(object $component): array
     {
@@ -325,7 +325,130 @@ final class RuleExtractor
             return [];
         }
 
-        return [$name => ['component' => $component, 'writable' => true]];
+        $nested = self::nestedRulesFor($component);
+
+        // A gate that cannot answer refuses the WHOLE field — the standing
+        // rule everywhere else in this package, and the one place on this
+        // path where the ordinary catch-and-degrade read would be wrong.
+        // Every other guarded read here degrades to a missing HINT; this one
+        // degrades to a dropped CONSTRAINT, so failing open makes mobile
+        // looser than web, which is the exact violation the starred name
+        // exists to close. Same closed answer `FileUpload::make(
+        // 'exploding_multiple')` already gets: no rule, so no key, so the
+        // column can be neither written nor cleared. See nestedRulesFor().
+        if ($nested === null) {
+            return [];
+        }
+
+        $leaves = [$name => ['component' => $component, 'writable' => true]];
+
+        // A tags field's ELEMENTS are strings, always — the contract says a
+        // `tags` value is a `List<String>` in every case. The field's own
+        // rules (`['array', 'list']`, in rulesFor()) constrain only the
+        // CONTAINER, so without this seed nothing constrained element TYPE
+        // at all, and the P7 final review measured both consequences:
+        // `{"separated_labels": [["x"], "y"]}` reached
+        // `TagSeparators::dehydrate()`'s `implode()` and answered 500
+        // ("Array to string conversion") at both write seams, while
+        // `{"labels": [{"x":"y"}]}` answered 200 and persisted a list of
+        // maps — the one case where the published `List<String>` contract
+        // was false. `max:20` on an array means COUNT ≤ 20, so even a
+        // declared nested rule let the map through.
+        //
+        // Seeded, not appended: a panel's own nested rules follow it, so
+        // `labels.*` is `['string', 'max:20']` and both apply. `in_array`
+        // rather than a dedupe over the whole list, because a nested rule
+        // may be a Rule OBJECT and `array_unique()`'s default comparison
+        // stringifies — a strict membership check is the only one that is
+        // safe for every element a panel may declare.
+        $nested = $type === 'tags' && ! in_array('string', $nested, true)
+            ? ['string', ...$nested]
+            : $nested;
+
+        // `labels.*`, with NO child segment — and that is the whole
+        // difference from the repeater branch above. A repeater emits
+        // `items.*.childName` because it has child components; a
+        // `TagsInput` has none, so the per-tag rules are the component's
+        // OWN, reached through `Contracts\HasNestedRecursiveValidationRules`
+        // (`getNestedRecursiveValidationRules()`, read from vendor, not
+        // guessed). Nothing in this package handled that interface before
+        // P7 Task 2, so a `->nestedRecursiveRules(['max:20'])` was enforced
+        // by the web panel and silently unenforced here — the exact "mobile
+        // must never be looser than web" violation Authorizer states.
+        //
+        // `writable: false`, because Arr::has()/Arr::set()
+        // (SettledSchema::reset()) have no wildcard support, so this is a
+        // name the settle's allow-set cannot express at all — its only job
+        // is naming paths `Arr::has()` can match, and this is not one.
+        //
+        // MEASURED, because the repeater's rationale does not transfer and
+        // an overstated one is how the next starred shape gets mis-scoped: a
+        // starred name here would be INERT, not destructive. `Arr::has()`
+        // never matches it, and `labels` — always minted alongside and
+        // writable in its own right — carries the whole array through
+        // regardless. P6c's "silently drops every submitted row" was correct
+        // for `items.*.child`, whose `child` is NOT separately a top-level
+        // writable name, so nothing else covers that write. Here something
+        // does. Pinned by TagsTest's `Arr::has` assertion, which reds if a
+        // future Laravel makes wildcards matchable.
+        //
+        // Minted only when there is something to enforce: an empty rule list
+        // on a starred name is a name the settle must keep excluding for no
+        // gain. Every tags field now has something (the `string` seed
+        // above); a non-tags field that declares no nested rules still has
+        // nothing.
+        //
+        // The rules travel ON the entry rather than being re-read from the
+        // component by rulesFor(): the seed is a fact about how this entry
+        // was minted, exactly like `writable`, and a second call to
+        // `getNestedRecursiveValidationRules()` cannot know about it.
+        if ($nested !== []) {
+            $leaves["{$name}.*"] = [
+                'component' => $component,
+                'writable' => false,
+                'rules' => $nested,
+            ];
+        }
+
+        return $leaves;
+    }
+
+    /**
+     * The per-element rules a component declares through
+     * `Contracts\HasNestedRecursiveValidationRules` — today only
+     * `TagsInput`.
+     *
+     * Three answers, and the third is why this does not go through read():
+     *
+     *  - `[]` — the component does not implement the interface at all (every
+     *    other field type), or implements it and declares no rules. An
+     *    ordinary writable field with no starred name.
+     *  - a rule list — the per-element rules.
+     *  - `null` — the accessor THREW, or answered something that is not a
+     *    list. `nestedRecursiveRules()` takes a `bool|Closure $condition`
+     *    that `getNestedRecursiveValidationRules()` evaluates, so this is
+     *    reachable from a panel's own closure, not a theoretical case.
+     *
+     * read() collapses the first and third into `[]`, which fails OPEN here:
+     * the field would be published freely editable with its per-tag bound
+     * silently gone. The caller refuses the whole field on `null` instead —
+     * a gate that cannot answer refuses, as everywhere else in this package.
+     *
+     * @return array<mixed>|null
+     */
+    private static function nestedRulesFor(object $component): ?array
+    {
+        if (! method_exists($component, 'getNestedRecursiveValidationRules')) {
+            return [];
+        }
+
+        try {
+            $rules = $component->getNestedRecursiveValidationRules();
+        } catch (Throwable) {
+            return null;
+        }
+
+        return is_array($rules) ? array_values($rules) : null;
     }
 
     /**
@@ -482,10 +605,31 @@ final class RuleExtractor
      * A field with no constraints still gets `nullable` rather than being
      * omitted: an absent key would pass through the validator unchecked.
      *
-     * @return list<string>
+     * Takes the whole descent entry, not just its component, because one
+     * component can mint two names: a `TagsInput` is both `labels` (the
+     * array) and `labels.*` (each tag), and the two want different rules
+     * off the same object. Reading only `$entry['component']` here is how
+     * the starred name would silently get the field's OWN rules — a
+     * `required` on the field arriving as a `required` on every tag.
+     *
+     * A starred entry carries its rules already resolved, so this returns
+     * them verbatim rather than re-reading the component: the descent
+     * composes a tags field's `string` seed with the panel's declared
+     * nested rules, and a second `getNestedRecursiveValidationRules()` call
+     * here would answer the declared half only — silently dropping the seed
+     * and reopening the 500 it exists to close.
+     *
+     * @param  array{component: object, writable: bool, rules?: list<mixed>}  $entry
+     * @return list<mixed>
      */
-    private static function rulesFor(object $component): array
+    private static function rulesFor(array $entry): array
     {
+        $component = $entry['component'];
+
+        if (isset($entry['rules'])) {
+            return $entry['rules'];
+        }
+
         // A repeater's own rule is shaped differently from an ordinary
         // field's — it bounds an ARRAY, not a string or number — so
         // `min`/`max` here mean row count, derived from minItems()/
@@ -523,6 +667,29 @@ final class RuleExtractor
         }
 
         $rules = [];
+
+        // A tags field's value is a LIST of strings on the wire in every
+        // case, separator or not. Without this a client could send the
+        // panel's own persisted delimited form (`"a,b,c"`) and store a string
+        // where the read path hands back an array — and slip past every
+        // `labels.*` rule on the way, since a string has no elements for the
+        // wildcard to reach. Same shape as the repeater's above, and for the
+        // same reason: `list` as well as `array`, because PHP's `array`
+        // admits a string-keyed map and a crafted `{"*": "x"}` matches the
+        // wildcard rules perfectly happily.
+        if (ComponentTypeMap::for($component) === 'tags') {
+            $rules = ['array', 'list'];
+        }
+
+        // `array` only, NOT `list`: unlike a `tags` field, a KeyValue's wire
+        // shape is a MAP (`Map<String, String>`), so a string-keyed payload
+        // is exactly the expected shape rather than the crafted attack
+        // `list` guards against above. Its keys and values are strings by
+        // construction (the design spec), so no further per-key rule is
+        // needed.
+        if (ComponentTypeMap::for($component) === 'keyvalue') {
+            $rules = ['array'];
+        }
 
         if (self::read($component, 'isRequired') === true) {
             $rules[] = 'required';

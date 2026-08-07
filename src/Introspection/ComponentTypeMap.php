@@ -20,12 +20,32 @@ final class ComponentTypeMap
         'Filament\\Forms\\Components\\TextInput' => 'text',
         'Filament\\Forms\\Components\\Textarea' => 'textarea',
         'Filament\\Forms\\Components\\Select' => 'select',
+        // Same `Concerns\HasOptions` trait and the same `getOptions()` as
+        // Select (measured in vendor), so the walker's existing option reader
+        // and flatOptions() apply unchanged — only the rendering differs.
+        'Filament\\Forms\\Components\\Radio' => 'radio',
         // Straight to `multiselect`, not to `select` refined by isMultiple():
         // a CheckboxList is always multi-valued and has no isMultiple(). It
         // carries getOptions() like Select does, so config() populates its
         // options with no extra handling. The pilot found 38 uses — 39% of
         // every warning that panel produced, and the single largest gap.
         'Filament\\Forms\\Components\\CheckboxList' => 'multiselect',
+        // The only component in this map that implements
+        // `Contracts\HasNestedRecursiveValidationRules` (measured in vendor),
+        // which is what makes its entry more than a config mapping — see
+        // RuleExtractor's `{$name}.*` branch. Its value is a `List<String>`
+        // on the wire in every case; a configured `separator` changes only
+        // what Filament stores, never what the client sends.
+        'Filament\\Forms\\Components\\TagsInput' => 'tags',
+        // DANGER, measured in vendor: the setters are `editableKeys()` /
+        // `editableValues()`, but the getters are NOT named after them —
+        // they are `canEditKeys()` / `canEditValues()`, alongside
+        // `isAddable()` / `isDeletable()`. Reading the setter name through
+        // the walker's guarded reader returns null, which read() converts
+        // to its fallback of `true` — so a locked field would publish as
+        // editable, with no error anywhere. See SchemaWalker::config()'s
+        // `keyvalue` branch, which reads the real names.
+        'Filament\\Forms\\Components\\KeyValue' => 'keyvalue',
         'Filament\\Forms\\Components\\Toggle' => 'toggle',
         'Filament\\Forms\\Components\\Checkbox' => 'checkbox',
         'Filament\\Forms\\Components\\DatePicker' => 'date',

@@ -8,9 +8,12 @@ use Filament\Actions\Action;
 use Filament\Forms\Components\CheckboxList;
 use Filament\Forms\Components\FileUpload;
 use Filament\Forms\Components\Hidden;
+use Filament\Forms\Components\KeyValue;
+use Filament\Forms\Components\Radio;
 use Filament\Forms\Components\Repeater;
 use Filament\Forms\Components\RichEditor;
 use Filament\Forms\Components\Select;
+use Filament\Forms\Components\TagsInput;
 use Filament\Forms\Components\TextInput;
 use Filament\Infolists\Components\TextEntry;
 use Filament\Resources\Resource;
@@ -216,6 +219,106 @@ class BannerResource extends Resource
                     'active' => 'Active',
                     'archived' => 'Archived',
                 ])->default('draft'),
+                // P7 Task 1: the walker's first Radio. Same
+                // Concerns\HasOptions trait and getOptions() as Select
+                // (measured in vendor), so config() reads it through the same
+                // option branch — only the widget differs. Two options, not
+                // one: a one-option fixture can't distinguish "renders the
+                // selected one" from "renders the only one" on either side.
+                Radio::make('plan')->options([
+                    'basic' => 'Basic',
+                    'pro' => 'Pro',
+                ]),
+                // A throwing options() closure must degrade this field's
+                // config to no options, not fail the whole /schema document —
+                // read() through SafeEvaluator, like every other closure.
+                Radio::make('exploding_plan')->options(
+                    fn () => throw new RuntimeException('boom'),
+                ),
+                // P7 Task 2: the walker's first TagsInput, and the only
+                // fixture anywhere that exercises
+                // HasNestedRecursiveValidationRules — the interface this
+                // package had never handled, so a per-tag rule was enforced
+                // by the web panel and silently unenforced here. Real
+                // suggestions, not an empty list: a fixture asserting against
+                // nothing is the failure this project has repeated twelve
+                // times across four phases.
+                TagsInput::make('labels')
+                    ->suggestions(['urgent', 'billing'])
+                    ->nestedRecursiveRules(['max:20']),
+                // The separator half. The wire value stays a List<String>
+                // either way — mirroring Filament's implode into the stored
+                // column is Task 3's write-path exception, not the client's
+                // job and not this task's.
+                TagsInput::make('separated_labels')->separator(','),
+                // A throwing config closure must degrade this one field, not
+                // the /schema document — read() through SafeEvaluator, like
+                // every other closure the walker evaluates.
+                TagsInput::make('exploding_labels')->separator(
+                    fn () => throw new RuntimeException('boom'),
+                ),
+                // P7 Task 4: the walker's first KeyValue. Two pairs, not one
+                // — a fixture with a single pair can never show pair 2's edit
+                // leaking into pair 1, the flat-state bug this field's Dart
+                // widget test exists to catch. Every gate left at its vendor
+                // default (all true); `restricted_meta` below is where each
+                // gate earns its own coverage.
+                // Labels and placeholders deliberately set to something
+                // OTHER than Filament's own defaults ("Key"/"Value", null
+                // placeholders) — a bug that hardcoded the vendor default
+                // instead of reading the panel's own config would still
+                // pass an assertion against "Key"/"Value", and this fixture
+                // exists to close that gap.
+                KeyValue::make('meta')
+                    ->keyLabel('Attribute')
+                    ->valueLabel('Detail')
+                    ->keyPlaceholder('e.g. env')
+                    ->valuePlaceholder('e.g. production')
+                    ->default(['env' => 'production', 'region' => 'eu']),
+                // The getter/gate coverage fixture. Each of the four flags is
+                // set to a value DIFFERENT from its neighbour
+                // (addable/editableKeys false, deletable/editableValues
+                // true) so a swapped accessor — reading `editableValues()`
+                // for `editableKeys`, or `deletable` for `addable` — cannot
+                // hide behind a fixture where every gate happens to agree.
+                // This is the fixture that would have caught the trap this
+                // task's brief names: the getters are `canEditKeys()` /
+                // `canEditValues()`, not `editableKeys()`/`editableValues()`
+                // (those are the setters) — reading the setter's name
+                // through the walker's guarded reader returns null, which
+                // read() converts to its fallback of `true`, so a LOCKED
+                // field would have published as editable with no error
+                // anywhere. Verified in vendor/filament/forms/src/Components/
+                // KeyValue.php.
+                KeyValue::make('restricted_meta')
+                    ->addable(false)
+                    ->deletable(true)
+                    ->editableKeys(false)
+                    ->editableValues(true)
+                    ->default(['a' => '1', 'b' => '2']),
+                // The mirror image of `restricted_meta` above — every gate
+                // that was `true` there is `false` here and vice versa.
+                // Needed for mutation coverage, not just the swap check:
+                // `restricted_meta` alone can never show a `deletable` or
+                // `editableValues` accessor hard-coded to `true`, because
+                // both already read `true` there — nothing would change.
+                // Between the two fixtures every one of the four gates has
+                // a real `false` case of its own.
+                KeyValue::make('restricted_meta_2')
+                    ->addable(true)
+                    ->deletable(false)
+                    ->editableKeys(true)
+                    ->editableValues(false)
+                    ->default(['a' => '1', 'b' => '2']),
+                // A throwing config closure must degrade this one field, not
+                // the /schema document — read() through SafeEvaluator, like
+                // every other closure the walker evaluates. `addable`'s
+                // guarded fallback is `true`, so this is what proves the
+                // degrade path independently of `restricted_meta`'s explicit
+                // `false` above.
+                KeyValue::make('exploding_meta')->addable(
+                    fn () => throw new RuntimeException('boom'),
+                ),
                 // A throwing default must degrade to no `default` key rather
                 // than a 500 for the whole /schema document — every closure
                 // the walker evaluates goes through SafeEvaluator.
@@ -424,6 +527,17 @@ class BannerResource extends Resource
             // container, not just the leaf.
             Section::make('Restricted')->disabled()->schema([
                 TextInput::make('locked_note'),
+                // A gate that cannot answer refuses; a disabled ancestor is a
+                // gate. `isDisabled()` propagates down from the section, the
+                // same way it already does for `restricted_image` below.
+                Radio::make('locked_plan')->options([
+                    'basic' => 'Basic',
+                    'pro' => 'Pro',
+                ]),
+                // P7 Task 4: a gate that cannot answer refuses; a disabled
+                // ancestor is a gate — the same rule `locked_plan` above
+                // proves for radio.
+                KeyValue::make('locked_meta'),
                 // A default *inside* a gated section. Filament fills defaults
                 // into state and then dehydrates, so this never reaches the
                 // row; the first version of FormDefaults wrote it.

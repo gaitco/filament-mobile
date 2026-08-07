@@ -1,5 +1,78 @@
 # Changelog
 
+## 0.4.0 — 2026-08-07
+
+- **Radio, tags and key/value.** Three previously-unmapped Filament field
+  types are editable on the phone: `radio` (`Radio::make()`), `tags`
+  (`TagsInput::make()`) and `keyvalue` (`KeyValue::make()`) join
+  `ComponentTypeMap::MAP`. **Radio** reuses `Select`'s own `Concerns\HasOptions`
+  — same trait, same `getOptions()` — so the walker's existing option reader
+  needs no change; only the rendering is new. One hazard found and closed: the
+  select/multiselect inline-cap branch falls back to publishing
+  `config.optionsUrl` for async search once past `options_inline_max`
+  options, which a radio can never call (no search affordance, nothing to
+  post a query to) — an over-cap radio now always inlines its full option
+  list, guarded `$type !== 'radio'` in `SchemaWalker::config()`. No
+  `RuleExtractor` change: `select` produces no `in:` rule for any
+  option-bearing field today, so there was no existing parity to give
+  `Radio`. **Tags** is always a `List<String>` on the wire, config
+  `{separator, suggestions}`; `splitKeys`/`tagPrefix`/`tagSuffix` are
+  withheld. Its per-tag rules (`->nestedRecursiveRules(['max:20'])`,
+  `HasNestedRecursiveValidationRules::getNestedRecursiveValidationRules()`,
+  never previously handled by this package) are extracted as `labels.*`
+  through the same name-space split P6c's repeater established:
+  `RuleExtractor` mints both `labels` and `labels.*`; `WritableNames`
+  contributes only `labels`, because `Arr::has()`/`Arr::set()`
+  (`Write\SettledSchema::reset()`) cannot express a starred name at all — the
+  starred entry is inert here rather than destructive, since `labels` persists
+  on its own, unlike a repeater's per-item names. **A real bug was found and
+  fixed underneath this:** `MobilePanelController::isRuleNameAllowed()`
+  admitted only the repeater's `name.*.child` shape
+  (`str_starts_with($name, $allowed . '.*.')`), never `labels.*` (no trailing
+  dot, no child segment) — so a per-tag rule was extracted, published on
+  `/schema`, and silently dropped before `validate()` ran: a 21-character tag
+  under `max:20` saved with a `200`. Now also admits
+  `$name === $allowed . '.*'` exactly. A tags field whose nested-rule closure
+  throws is refused wholesale — no rule, no writable name — rather than
+  degraded like every other guarded read in this package, because the closure
+  guards a constraint, not a hint. **The separator mirror**, the first place
+  this package reproduces Filament's own dehydration: a `->separator(',')`
+  field's submitted array is joined server-side, after `fillMissingPaths()`,
+  before both `store()` and `update()` persist it — one function, both
+  endpoints — so the column matches what the panel itself writes. The inverse
+  read-side un-join lives in `RecordSerializer::hydrate()`, so all six
+  serialize seams (`index()`, `show()`, the `store()` `201` body, the
+  `update()` `200` body, `RelationController`'s rows, and any future one)
+  share one answer instead of drifting independently; a related row's owning
+  resource is resolved by `ResourceRegistry::findByModel()`, which returns
+  `null` unless exactly one opted-in resource maps to the model — degrading
+  to the **stored representation**, which for a separator-configured field
+  is the delimited `String`, so a relation row is the one place a client
+  must tolerate a `tags` field that is not a list (it cannot be split blind:
+  the separator is declared per-resource, which is precisely what could not
+  be resolved). This mirror is a stated reproduction, not a general
+  capability: a future Filament change to `dehydrateStateUsing()` would
+  silently diverge, and the test that would catch it asserts the stored
+  column, not the response code. **Key/value** publishes
+  `addable`/`deletable`/`editableKeys`/`editableValues` plus labels and
+  placeholders, value a `Map<String, String>`; the getters read are
+  `canEditKeys()`/`canEditValues()`, not the setter names
+  `editableKeys()`/`editableValues()` — reading the wrong ones through this
+  package's guarded reader would return `null` and fail open. All four gates
+  are **client hints, not enforced by the write path**: `RuleExtractor`
+  constrains the field to `array` and nothing more, so a crafted request can
+  add, remove or rename a key a `false` gate says it should not — matching
+  Filament itself, which never re-checks these flags on write either, but a
+  real gap from `disabled`, which this package's write path does enforce.
+  Known weaknesses, stated in the README: `splitKeys`/`tagPrefix`/
+  `tagSuffix` and `Radio::isInline()` are ignored; key/value has no
+  reordering (matching the repeater) and no key-uniqueness validation; its
+  four gates are advisory, and an all-four-`false` field is effectively
+  read-only today and could join `WritableNames` using the same machinery
+  `disabled` already uses. **No break for any host**: three new component
+  types joining `ComponentTypeMap::MAP` is additive, and nothing about the
+  existing wire shape for any other type changed.
+
 ## 0.3.0 — 2026-08-07
 
 - **Upload.** `POST /{resource}/upload` (multipart: `file` + `field`) makes a

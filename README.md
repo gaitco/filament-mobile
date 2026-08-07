@@ -173,6 +173,9 @@ fields the infolist names.
 | [Actions](#actions) | The panel's own record actions, published per record with their authorization already applied |
 | [Upload](#upload) | Single-file `FileUpload` / `SpatieMediaLibraryFileUpload`, with the field's own accept and size rules enforced |
 | [Repeater](#repeater) | JSON-column repeaters, validated per row |
+| [Radio](#radio) | Real radio buttons, sharing `Select`'s own options |
+| [Tags](#tags) | Free-form string tags, per-tag rules enforced, a configured separator mirrored into the stored column |
+| [Key/value](#keyvalue) | Free-form key-value pairs, gated by four client hints |
 | [Relations](#relations) | Relation managers as read-only child lists |
 | [Rich text](#rich-text) | `RichEditor` columns as a structured document, sanitised by construction |
 | [Dashboard](#dashboard) | The panel's opted-in widgets, computed live |
@@ -569,6 +572,241 @@ no row reaches the database.
   documents — into the column on any create that never mentions the field.
   Both `SchemaWalker` and `FormDefaults` withhold it by type, so an ordinary
   create leaves the column untouched rather than corrupting it.
+
+## Radio
+
+`Radio::make('plan')->options([...])` is a working, editable field on the
+phone, rendered as real radio buttons rather than a dropdown.
+
+```php
+Radio::make('plan')->options([
+    'monthly' => 'Monthly',
+    'yearly' => 'Yearly',
+]);
+```
+
+**The server side of this is nearly free, because `Radio` shares `Select`'s
+option machinery.** Both use `Concerns\HasOptions` — the same trait, the same
+`getOptions()` — measured against `filament/filament` in `vendor/`, not
+assumed. The walker's existing option reader and `flatOptions()` apply to a
+`radio` node unchanged; only the Flutter-side rendering is new.
+
+**One hazard, found and closed: a radio can never use the search-endpoint
+fallback, so it must never be offered one.** `select`/`multiselect` degrade
+past `options_inline_max` options to `config.optionsUrl`, publishing an async
+search affordance instead of the full list. A radio has no
+`Concerns\CanBeSearchable` and nothing to post a query to — so before the
+fix, an over-cap radio hit the same branch and published an `optionsUrl` a
+client could never call, silently dropping every option past the cap with no
+way to reach the rest. The inline-cap branch in `SchemaWalker::config()` is
+now guarded `$type !== 'radio'`, so an over-cap radio always inlines its full
+option list instead.
+
+**No new `RuleExtractor` rule.** An earlier draft of the design spec assumed
+`Radio` would get the same `in:` constraint `select` already has; `select`
+produces no such rule for any option-bearing field today, so there was
+nothing to give `Radio` parity with. Left as-is.
+
+### Known weaknesses, stated now
+
+- **`Radio::isInline()` is ignored.** Options always stack one per row —
+  the right treatment on a phone regardless of what the panel configured.
+
+## Tags
+
+`TagsInput::make('labels')` is a working, validated, editable field on the
+phone — a free-form list of strings with optional suggestions.
+
+```php
+TagsInput::make('labels')
+    ->suggestions(['urgent', 'billing'])
+    ->nestedRecursiveRules(['max:20']);
+```
+
+publishes a `tags` node:
+
+```jsonc
+{
+  "type": "tags",
+  "name": "labels",
+  "config": { "separator": null, "suggestions": ["urgent", "billing"] }
+}
+```
+
+**The value is a `List<String>` on the wire in every case — separator or
+not.** `splitKeys`, `tagPrefix` and `tagSuffix` are deliberately withheld:
+a tag commits on submit only, and prefixes/suffixes are presentation this
+slice does not reproduce.
+
+### The separator mirror — the one place this package reproduces Filament's dehydration
+
+`TagsInput::make('labels')->separator(',')` changes what the **panel**
+stores: Filament's own `dehydrateStateUsing()` joins the submitted array
+into `"a,b,c"` before it reaches the column, and `hydrateTags()` explodes it
+back on read. This package's write path deliberately never runs Filament's
+dehydration for anything else — it writes `validated()` straight to the
+model — so without a deliberate exception, a client sending an array to a
+separator-configured field would store an array where the panel writes a
+delimited string: two surfaces, two shapes, one column.
+
+The fix is a narrow, stated exception rather than a new general capability.
+`TagSeparators::dehydrate()` joins a separator-configured field's submitted
+array with that separator, run on the final attribute array — **after**
+`fillMissingPaths()`, not on `validated()` alone, because `TagsInput` ships a
+`[]` default through `setUp()` that reaches every create via `FormDefaults`,
+and joining before that default is filled in throws on every create that
+never mentions the field. Both `store()` and `update()` call the same
+function; there is one transform, not two copies that could drift.
+
+The inverse — un-joining a stored delimited string back into an array for a
+client to read — lives in `RecordSerializer::hydrate()`, the single place
+every serialised record passes through. That is deliberate: **six** read
+seams share this one answer — `index()`, `show()`, the `store()` `201` body,
+the `update()` `200` body, `RelationController`'s relation rows, and any
+future endpoint that serialises a record, because the un-join is baked into
+`RecordSerializer::serialize()` itself rather than wired per call site. A
+related row's owning resource — needed to know whether *that* row's own
+`tags` fields are separator-configured — is resolved through
+`ResourceRegistry::findByModel()`, which returns `null` unless **exactly
+one** opted-in resource maps to the model class: zero matches or an
+ambiguous match degrades to the raw stored value rather than guessing which
+resource's configuration applies.
+
+Say the consequence plainly, because "the raw stored value" reads more
+conservative than it is: for a *separator-configured* field that value is
+the delimited `String`, so this is the one case where the published
+"`List<String>` in every case" is false, and a client parsing that field off
+a relation row gets a type it was told it would never see. It is not fixable
+by splitting anyway — the separator is a property of the resource, which is
+exactly what could not be resolved, and splitting on a guessed one publishes
+one wrong tag instead of two right ones. Several resources over one model is
+an ordinary panel shape (this package's own fixtures put five over
+`Company`), so the honest degradation is kept and the consequence documented
+here and in `contract/README.md`, rather than traded for a guess.
+
+This mirror is a reproduction of Filament's behaviour, not a general
+capability this package now has — a future Filament release changing
+`dehydrateStateUsing()` would silently diverge from it. The test that would
+catch that asserts the **stored column**, not the response code: a `200`
+was never the question this feature had to answer.
+
+### Per-tag rules, and the name-space split this package already established
+
+`TagsInput` implements `HasNestedRecursiveValidationRules` —
+`getNestedRecursiveValidationRules()` — and this package had never handled
+that interface before this slice; a `->nestedRecursiveRules(['max:20'])` on
+the field was silently unenforced by the mobile API, in violation of this
+package's own standing rule that the rules a client is shown and the rules
+the server enforces cannot drift apart.
+
+The fix reuses the split P6c's repeater already established, for the same
+reason: `RuleExtractor` mints **both** `labels` and `labels.*` — the second
+for validation, keyed by index, so a `->nestedRecursiveRules(['max:20'])`
+violation on the phone's second tag comes back `422` keyed `labels.1`, not a
+whole-field error. `WritableNames` — the settle's allow-set — contributes
+**only** `labels`: `Write\SettledSchema::reset()` calls `Arr::set()`/
+`Arr::has()`, neither of which has wildcard support, so a starred name in
+the allow-set cannot be expressed at all, not merely mishandled —
+`Arr::has($state, 'labels.*')` is always `false` and `Arr::set` would write a
+literal `*` key. Unlike a repeater's per-item names, the starred entry here
+is **inert rather than destructive** if it were ever mistakenly admitted:
+`labels` is independently in the allow-set and persists on its own, so a
+tags field has no analogue to the repeater's row-corruption failure mode —
+the split is still mandatory for expressibility, just not for that reason.
+
+**A real bug was found and fixed here: a starred rule name reaching
+`/schema` was silently never enforced.** `MobilePanelController`'s
+`isRuleNameAllowed()` admitted only the repeater's `name.*.child` shape
+(`str_starts_with($name, $allowed . '.*.')`) — which matches
+`line_items.*.sku` but never `labels.*`, because a tags field's per-tag rule
+has no trailing dot or child segment. So `labels.*` was extracted, published
+on `/schema`, and then silently dropped before `$request->validate()` ran —
+a 21-character tag under `->nestedRecursiveRules(['max:20'])` saved with a
+`200`. The check now also admits `$name === $allowed . '.*'` exactly.
+
+**A tags field whose nested-rule closure throws is refused entirely, not
+defaulted.** Every other guarded read in this package degrades a throwing
+closure to a safe default and keeps the field usable — but a nested-rule
+closure guards a *constraint*, not a hint, so treating a throw as "no nested
+rules" would silently widen what the field accepts. `nestedRulesFor()`
+returns `null` on a throw, distinct from `[]`, and the caller reads `null` as
+"refuse the whole field": no rule, no writable name — the one place on the
+tags side where degrading like everything else in this package would make
+mobile looser than web.
+
+### Known weaknesses, stated now
+
+- **`splitKeys`, `tagPrefix` and `tagSuffix` are ignored.** A tag commits on
+  submit only, and prefixes/suffixes are presentation this slice does not
+  reproduce.
+- **The separator mirror reproduces Filament's `dehydrateStateUsing()`,
+  rather than reading it generically.** A future Filament release changing
+  that method's behaviour would silently diverge from this package's copy —
+  see "The separator mirror" above for the test that would catch it.
+
+## Key/value
+
+`KeyValue::make('meta')` is a working, editable field on the phone — a
+free-form set of string key/value pairs.
+
+```php
+KeyValue::make('meta')
+    ->keyLabel('Key')
+    ->valueLabel('Value');
+```
+
+publishes a `keyvalue` node:
+
+```jsonc
+{
+  "type": "keyvalue",
+  "name": "meta",
+  "config": {
+    "addable": true, "deletable": true,
+    "editableKeys": true, "editableValues": true,
+    "keyLabel": "Key", "valueLabel": "Value",
+    "keyPlaceholder": null, "valuePlaceholder": null
+  }
+}
+```
+
+The value is a `Map<String, String>` on the wire, by construction. The
+field's own rule is `array` and nothing narrower — keys and values are
+strings by construction, and this package validates neither key uniqueness
+nor row count for this type.
+
+**The getters are `canEditKeys()` / `canEditValues()`, not the setter
+names.** `KeyValue`'s setters are `editableKeys()` / `editableValues()`; its
+getters are `canEditKeys()` / `canEditValues()`, alongside `isAddable()` /
+`isDeletable()` — measured against `vendor/`, not guessed. Reading the setter
+name through this package's guarded reader would return `null` and fail
+open, publishing every field as editable regardless of what the panel
+configured. `SchemaWalker::config()` reads the correct four accessors, all
+defaulting to `true` to match Filament's own defaults.
+
+**The four gates are client hints, not enforced by the write path — say this
+plainly, because it is easy to assume otherwise.** `RuleExtractor` constrains
+`meta` to `array` and nothing more: a crafted request can add, remove or
+rename a key an `editableKeys: false` gate says it should not be able to,
+and the write path persists it verbatim. This matches Filament itself —
+the web panel's own dehydration never re-checks these flags either, so
+mobile is no looser than web — but it is a real gap from `disabled`, which
+this package **does** enforce (`WritableNames` refuses the whole field). It
+is left as a hint rather than built out: enforcing it needs the record's
+previously-stored keys at validation time to diff against (which keys were
+added, removed, or renamed), a different shape of rule than anything else
+this package validates, for a field with no reported misuse. An
+all-four-gates-`false` `KeyValue` is effectively read-only today and could
+join `WritableNames` using the same machinery `disabled` already uses, if a
+panel author ever reports relying on the gates as authorization.
+
+### Known weaknesses, stated now
+
+- **No reordering**, matching the repeater — this package's own widget has
+  never offered one for either array-valued field.
+- **No key-uniqueness validation.** A duplicate key entered on the phone
+  collapses in the submitted map, exactly as it does on the web.
+- **The four gates are advisory**, per the paragraph above.
 
 ## Relations
 
@@ -1216,9 +1454,10 @@ Measured against a real 35-resource production panel.
   section above; only `Repeater::relationship()` remains out of scope.
   `RichEditor` now walks too — a `textarea` on the form always (see Rich
   text above), and `rich_entry` on the infolist where `->prose()` or the
-  model's own `HasRichContent` says the column is rich. None of the
-  percentages above has been re-measured against the pilot panel since these
-  two shipped.
+  model's own `HasRichContent` says the column is rich. `Radio`, `TagsInput`
+  and `KeyValue` now walk as editable fields too — see the Radio, Tags and
+  Key/value sections above. None of the percentages above has been
+  re-measured against the pilot panel since these shipped.
 - **A media-library image on a card serialises as `null`.** `leadingImage()`
   needs a real attribute; there is no way to name a media collection yet.
 - **Badges carry the raw value**, not the formatted label. Supply the colour map

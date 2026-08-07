@@ -135,6 +135,33 @@ return new class extends Migration
             // relation-write child that `->dehydrated(true)` puts back into
             // the row's stored state while no rule ever names it.
             $table->json('relation_rows')->nullable();
+            // P7 Task 1: the walker's first Radio. `locked_plan` needs no
+            // column — it sits inside the disabled "Restricted" section, so
+            // it earns no rule and is never in the mass-assignment whitelist.
+            $table->string('plan')->nullable();
+            $table->string('exploding_plan')->nullable();
+            // P7 Task 2: the TagsInput columns. `labels` is array-cast on the
+            // model, so a submitted list persists as a JSON array — the shape
+            // a separator-free TagsInput has always stored.
+            $table->json('labels')->nullable();
+            $table->json('exploding_labels')->nullable();
+            // P7 Task 3: `text`, and NOT array-cast on the model — the column
+            // a separator-configured TagsInput actually fills. Filament's
+            // `dehydrateStateUsing` implodes the state into "a,b,c" before it
+            // saves, so this is the shape the web panel writes and the shape
+            // the mobile write path now mirrors. It is `text` precisely so the
+            // "stores a delimited string" assertion is not vacuous: under a
+            // json column with an array cast, `['a','b']` and `"a,b"` both
+            // read back as something list-shaped and the test proves nothing.
+            $table->text('separated_labels')->nullable();
+            // P7 Task 4: the walker's first KeyValue. `locked_meta` needs no
+            // column — it sits inside the disabled "Restricted" section, so
+            // it earns no rule and is never in the mass-assignment
+            // whitelist, the same reasoning `locked_plan` above documents.
+            $table->json('meta')->nullable();
+            $table->json('restricted_meta')->nullable();
+            $table->json('restricted_meta_2')->nullable();
+            $table->json('exploding_meta')->nullable();
             $table->timestamp('deleted_at')->nullable();
             $table->timestamps();
         });

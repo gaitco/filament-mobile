@@ -15,6 +15,7 @@ use Gait\FilamentMobile\Introspection\FormDefaults;
 use Gait\FilamentMobile\Introspection\HeadlessSchemaHost;
 use Gait\FilamentMobile\Introspection\RichContent;
 use Gait\FilamentMobile\Introspection\SchemaWalker;
+use Gait\FilamentMobile\Introspection\TagSeparators;
 use Gait\FilamentMobile\Introspection\WalkWarnings;
 use Gait\FilamentMobile\MobileResource;
 use Gait\FilamentMobile\PanelSchemaBuilder;
@@ -156,7 +157,7 @@ final class MobilePanelController
 
         $records = $query->paginate(config('filament-mobile.per_page'));
 
-        $serializer = new RecordSerializer($card, (new ($class::getModel())())->getRouteKeyName());
+        $serializer = new RecordSerializer($card, (new ($class::getModel())())->getRouteKeyName(), $class);
 
         return response()->json([
             'data' => array_map(
@@ -239,14 +240,19 @@ final class MobilePanelController
         // A `Hidden::make('type')->default(...)` — the ordinary way a resource
         // stamps a record as its own — is invisible to the client by
         // definition, so only the server can supply it. See FormDefaults.
-        $record = $model::create($this->fillMissingPaths(
-            $validated,
-            FormDefaults::fromComponents($components),
+        // TagSeparators::dehydrate() is the package's one reproduction of
+        // Filament's dehydration, and it wraps the FINAL attribute array at
+        // BOTH write seams — see update(), which calls the same helper for the
+        // same reason. A separator changes the column's shape, so a mirror
+        // applied to one seam is a bug in the other.
+        $record = $model::create(TagSeparators::dehydrate(
+            $this->fillMissingPaths($validated, FormDefaults::fromComponents($components)),
+            $components,
         ));
 
         $this->saveRelations($class, $settled->state(), $record, 'create', $request->all());
 
-        $serializer = new RecordSerializer($mobile->getCard(), $record->getRouteKeyName());
+        $serializer = new RecordSerializer($mobile->getCard(), $record->getRouteKeyName(), $class);
 
         return response()->json(['data' => $serializer->serialize($record)], 201);
     }
@@ -307,7 +313,7 @@ final class MobilePanelController
         // is covered only by this half.
         $infolist = $this->infolistNodes($class, $resource, $attributes);
 
-        $serializer = (new RecordSerializer($mobile->getCard(), $model->getRouteKeyName()))
+        $serializer = (new RecordSerializer($mobile->getCard(), $model->getRouteKeyName(), $class))
             ->withInfolistPaths($this->leafNames($infolist))
             ->withFormPaths($this->formPaths($class, $resource, $attributes, $record))
             ->withRichPaths(RichContent::entryNamesIn($infolist));
@@ -315,6 +321,10 @@ final class MobilePanelController
         $resolver = new ActionResolver($class, $mobile);
 
         return response()->json([
+            // Not wrapped in TagSeparators::hydrate() here, deliberately: the
+            // read half lives inside RecordSerializer, so index() and the
+            // write responses get it too. Wrapping one seam is how the first
+            // cut of this shipped two shapes for one column.
             'data' => $serializer->serialize($record),
             // The resource-level block in /schema reports capability, because
             // an ownership policy has no class-level answer. This one is the
@@ -538,14 +548,16 @@ final class MobilePanelController
         // payload by construction, so its stored value was lost on every save.
         // The record's own value fills the gaps, path by path — same helper the
         // defaults use on create, so the two can't drift.
-        $record->update($this->fillMissingPaths(
-            $validated,
-            $this->storedPaths($record, array_keys($rules)),
+        // The same one transform store() applies, at the second write seam —
+        // see TagSeparators and store()'s comment.
+        $record->update(TagSeparators::dehydrate(
+            $this->fillMissingPaths($validated, $this->storedPaths($record, array_keys($rules))),
+            $settled->components(),
         ));
 
         $this->saveRelations($class, $settled->state(), $record, 'edit', $request->all());
 
-        $serializer = new RecordSerializer($mobile->getCard(), $record->getRouteKeyName());
+        $serializer = new RecordSerializer($mobile->getCard(), $record->getRouteKeyName(), $class);
 
         return response()->json(['data' => $serializer->serialize($record)]);
     }
@@ -693,19 +705,34 @@ final class MobilePanelController
     }
 
     /**
-     * Whether a RuleExtractor key may reach `$request->validate()` — an exact
-     * writable name (every ordinary field, and a repeater's own whole-array
-     * name), or a per-item path prefixed by a writable repeater's name
-     * (`line_items.*.sku` when `line_items` is writable). See allowedRules()'s
-     * docblock for why the exact-match-only predicate this replaces was
-     * silently dropping every repeater child rule.
+     * Whether a RuleExtractor key may reach `$request->validate()`. Three
+     * shapes, all keyed off a name that is writable in its own right:
+     *
+     *  - the exact name — every ordinary field, and a repeater's or a tags
+     *    field's own whole-array name;
+     *  - `line_items.*.sku` — a repeater's per-item path, which has a child
+     *    segment because a repeater has child components;
+     *  - `labels.*` — a tags field's per-TAG path, which has NO child
+     *    segment because a TagsInput has no children: the per-element rules
+     *    are the component's own, through
+     *    `HasNestedRecursiveValidationRules`. P7 Task 2 measured this: the
+     *    `.*.` prefix alone (the only shape that existed before tags) matched
+     *    `line_items.*.sku` and never `labels.*`, so every per-tag rule was
+     *    extracted, published, and then dropped here — a 21-character tag
+     *    behind `->nestedRecursiveRules(['max:20'])` saved with a 200.
+     *
+     * See allowedRules()'s docblock for why the exact-match-only predicate
+     * that preceded all of this was silently dropping every repeater child
+     * rule.
      *
      * @param  list<string>  $writable
      */
     private static function isRuleNameAllowed(string $name, array $writable): bool
     {
         foreach ($writable as $allowed) {
-            if ($name === $allowed || str_starts_with($name, $allowed . '.*.')) {
+            if ($name === $allowed
+                || $name === $allowed . '.*'
+                || str_starts_with($name, $allowed . '.*.')) {
                 return true;
             }
         }

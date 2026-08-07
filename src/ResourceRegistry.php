@@ -49,6 +49,35 @@ final class ResourceRegistry
     }
 
     /**
+     * The mobile resource that OWNS a model — the one whose `form()` declares
+     * that model's column shapes — or null when the answer is not unambiguous.
+     *
+     * Deliberately not "the first match". A model may be served by several
+     * resources (this package's own fixtures have five over `Company`) and by
+     * none, and both are ordinary panel shapes rather than errors. The caller
+     * is RelationController, whose child rows belong to whatever resource
+     * writes them, and its fallback for a null answer is the raw stored value
+     * — the behaviour every relation had before this existed. Guessing between
+     * two resources would pick a form at random and could publish a column in
+     * the wrong shape, which is worse than not answering.
+     *
+     * @param  class-string  $model
+     * @return class-string|null
+     */
+    public function findByModel(string $model): ?string
+    {
+        $owners = [];
+
+        foreach ($this->mobileResources() as $class => $mobile) {
+            if ($class::getModel() === $model) {
+                $owners[] = $class;
+            }
+        }
+
+        return count($owners) === 1 ? $owners[0] : null;
+    }
+
+    /**
      * The resource's Filament slug, so a mobile key matches the web panel's
      * URL for the same resource. A nested resource's slug ('blog/posts')
      * becomes 'blog-posts': the key is a single route segment.

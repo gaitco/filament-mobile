@@ -6,6 +6,7 @@ namespace Gait\FilamentMobile\Introspection;
 
 use Error;
 use Gait\FilamentMobile\Validation\RuleExtractor;
+use stdClass;
 use Throwable;
 
 /**
@@ -239,6 +240,21 @@ final class SchemaWalker
         // repeater's value travels as (design spec) regardless.
         if ($node['type'] !== 'repeater') {
             $default = $this->read($component, 'getDefaultState', $resource, $name, 'default', null);
+
+            // PHP cannot tell an empty MAP from an empty LIST — both are `[]`
+            // — so `json_encode` emits a JSON list for either. Every other
+            // type on this wire is fine with that ambiguity resolving to a
+            // list (an untouched Select/TagsInput/Repeater really does default
+            // to a list-shaped nothing), but `keyvalue`'s declared wire shape
+            // is `Map<String, String>` in every other case, and a PANEL
+            // AUTHOR who never calls ->default() still gets `[]` here because
+            // KeyValue::setUp() unconditionally calls `$this->default([])`
+            // (measured in vendor). Cast to an empty object so the one case
+            // that is genuinely ambiguous resolves to the type the contract
+            // promises, not to PHP's tie-break.
+            if ($node['type'] === 'keyvalue' && $default === []) {
+                $default = new stdClass();
+            }
 
             if ($default !== null) {
                 $node['default'] = $default;
@@ -562,10 +578,70 @@ final class SchemaWalker
             return $config;
         }
 
-        if (in_array($type, ['select', 'multiselect'], true)) {
+        if ($type === 'tags') {
+            // `separator` is published for what it tells the client about the
+            // field, never as an instruction to build the delimited form: the
+            // wire value is a `List<String>` in every case, and mirroring
+            // Filament's own implode into the column happens server-side at
+            // write time. Two surfaces, one shape per column.
+            //
+            // `splitKeys`, `tagPrefix` and `tagSuffix` are deliberately not
+            // published — the design spec's stated known weaknesses: a tag
+            // commits on submit only, and prefixes/suffixes are presentation
+            // this slice does not reproduce. Publishing a key the client
+            // ignores is how a contract grows fields nothing honours.
+            $separator = $this->read($component, 'getSeparator', $resource, $name, 'separator');
+            $suggestions = $this->read($component, 'getSuggestions', $resource, $name, 'suggestions', []);
+
+            return [
+                'separator' => is_string($separator) ? $separator : null,
+                // `array_values`, and string-only: getSuggestions() evaluates
+                // a host closure that may hand back an Arrayable's keyed
+                // array, and the contract's list must not arrive as a JSON
+                // object. A non-string entry is dropped rather than failing
+                // the field — a suggestion is a convenience, never a rule.
+                'suggestions' => is_array($suggestions)
+                    ? array_values(array_filter($suggestions, 'is_string'))
+                    : [],
+            ];
+        }
+
+        if ($type === 'keyvalue') {
+            // The four gates that decide what a user may change — and none
+            // of the cosmetics (design spec). `isAddable()`/`isDeletable()`
+            // are named after their own setters, but `canEditKeys()`/
+            // `canEditValues()` are NOT: the setters are `editableKeys()`/
+            // `editableValues()`. Reading the setter name here would return
+            // null through read()'s guarded closure, which read() converts
+            // to its fallback of `true` — so a locked field would publish as
+            // editable, with no error anywhere. Measured in vendor/filament/
+            // forms/src/Components/KeyValue.php, not guessed — the same trap
+            // P6f's `filament::` prefix and Task 2's
+            // `getNestedRecursiveValidationRules()` already sprang once
+            // each.
+            return [
+                'addable' => (bool) $this->read($component, 'isAddable', $resource, $name, 'addable', true),
+                'deletable' => (bool) $this->read($component, 'isDeletable', $resource, $name, 'deletable', true),
+                'editableKeys' => (bool) $this->read($component, 'canEditKeys', $resource, $name, 'editableKeys', true),
+                'editableValues' => (bool) $this->read($component, 'canEditValues', $resource, $name, 'editableValues', true),
+                'keyLabel' => $this->read($component, 'getKeyLabel', $resource, $name, 'keyLabel'),
+                'valueLabel' => $this->read($component, 'getValueLabel', $resource, $name, 'valueLabel'),
+                'keyPlaceholder' => $this->read($component, 'getKeyPlaceholder', $resource, $name, 'keyPlaceholder'),
+                'valuePlaceholder' => $this->read($component, 'getValuePlaceholder', $resource, $name, 'valuePlaceholder'),
+            ];
+        }
+
+        if (in_array($type, ['select', 'multiselect', 'radio'], true)) {
             // Through read(), like every other closure: a throwing
             // isSearchable() costs this one field's inlining decision, not the
             // whole /schema document.
+            //
+            // `radio` widens this branch rather than copying it — Radio uses
+            // the very same Concerns\HasOptions trait and getOptions() as
+            // Select (measured in vendor) — but it has no isSearchable() at
+            // all (no Concerns\CanBeSearchable), so read()'s method_exists
+            // guard alone already makes $searchable permanently false for
+            // it, with no extra branch needed.
             //
             // Read BEFORE getOptions(), not after: Filament's own
             // getOptionsFromRelationship() returns null — and so getOptions()
@@ -599,7 +675,14 @@ final class SchemaWalker
             // list (a searchable relationship it will not enumerate, above)
             // or the list having outgrown the wire (the cap — the pilot
             // measured a 55-option list in a DEVELOPMENT database).
-            if (($searchable && $options === []) || count($flat) > $cap) {
+            // A radio is never searchable and has no options endpoint to post
+            // a query to — the client has no route to resolve `optionsUrl`
+            // against — so the inlining cap and the search-endpoint fallback
+            // both apply only to select/multiselect. An over-cap radio still
+            // inlines every option rather than publish an affordance that
+            // cannot work; the panel author's list, however long, is the only
+            // list this package can offer on a control with no search box.
+            if ($type !== 'radio' && (($searchable && $options === []) || count($flat) > $cap)) {
                 return [
                     'optionsUrl' => '/' . trim((string) config('filament-mobile.prefix'), '/')
                         . '/' . $resourceKey . '/options',

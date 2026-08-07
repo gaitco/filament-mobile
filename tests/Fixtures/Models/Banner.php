@@ -44,6 +44,23 @@ class Banner extends Model implements HasRichContent
         'locked_rows' => 'array',
         'guarded_rows' => 'array',
         'relation_rows' => 'array',
+        // P7 Task 2: a TagsInput's value is a list on the wire and, with no
+        // separator, a list in the column too.
+        //
+        // `separated_labels` is deliberately ABSENT here (P7 Task 3): its
+        // column is `text` holding "a,b", the shape Filament's own
+        // `dehydrateStateUsing` writes, and the array cast is what would make
+        // every assertion about that shape vacuous.
+        'labels' => 'array',
+        'exploding_labels' => 'array',
+        // P7 Task 4: a KeyValue's value is a Map<String, String> on the wire,
+        // and the array cast is what lets seedBannerWith() write one
+        // directly. `restricted_meta` needs two pairs so a flat-state bug —
+        // editing pair 2 leaking into pair 1 — has somewhere to show up.
+        'meta' => 'array',
+        'restricted_meta' => 'array',
+        'restricted_meta_2' => 'array',
+        'exploding_meta' => 'array',
     ];
 
     /**
