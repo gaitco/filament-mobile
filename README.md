@@ -184,8 +184,66 @@ fields the infolist names.
 | [Locale and direction](#locale-and-direction) | The panel's own locale and `ltr`/`rtl`, so the phone lays out the way the panel does |
 | [Schema caching](#schema-caching) | An ETag on `/schema` so a cold start is one conditional request |
 
+**Which fields work?** See [Supported form inputs](#supported-form-inputs) — the table to check before pointing this at a panel.
+
 Everything below is reference. Read the section for the feature you are wiring;
 each ends with a **Known weaknesses** list stating plainly what it does not do.
+
+## Supported form inputs
+
+The one table to check before pointing this at a panel. **A field whose
+component is not here is dropped** — the walker reports it as
+`unsupported component type`, `doctor` names it, and, because a dropped field
+gets no validation rule either, a `NOT NULL` column behind one fails at the
+database rather than at validation.
+
+| Filament component | Wire type | Notes |
+|---|---|---|
+| `TextInput` | `text` | refines itself to `email`, `password` or `number` from its own accessors |
+| `Textarea` | `textarea` | |
+| `Select` | `select` | `multiselect` when `->multiple()`; a searchable relationship select publishes an `optionsUrl` instead of inlining |
+| `Radio` | `radio` | shares `Select`'s own options; always inlines, never falls back to a search URL |
+| `CheckboxList` | `multiselect` | |
+| `TagsInput` | `tags` | per-tag rules enforced; a `->separator()` is mirrored into the stored column |
+| `KeyValue` | `keyvalue` | four gates published as **client hints**, not enforced on write |
+| `Toggle` | `toggle` | |
+| `Checkbox` | `checkbox` | |
+| `DatePicker` | `date` | publishes `minDate` / `maxDate` / `seconds` |
+| `DateTimePicker` | `datetime` | same |
+| `TimePicker` | `time` | same; a bound may be a bare `09:00` or a full datetime |
+| `ColorPicker` | `color` | in the format the panel declared, never converted |
+| `FileUpload` | `file` | **single-file only** — a `->multiple()` upload publishes `readOnly: true` |
+| `SpatieMediaLibraryFileUpload` | `file` | same |
+| `RichEditor` | `textarea` | **edited as raw HTML**; it renders as a document on read (see [Rich text](#rich-text)) but editing is still markup |
+| `Repeater` | `repeater` | JSON-column only, and only when **every** child round-trips |
+| `Hidden` | — | deliberately skipped from the wire; its `->default()` still applies on create |
+
+Layout components pass through as containers: `Section`, `Grid`, `Tabs`,
+`Tabs\Tab` (flattened to a section — tabs are a poor control on a phone) and
+`Fieldset`.
+
+### Not supported
+
+`Builder`, `CodeEditor`, `MarkdownEditor`, `ModalTableSelect`, `MorphToSelect`,
+`OneTimeCodeInput`, `Placeholder`, `Slider`, `TableSelect`, `ToggleButtons`,
+`ViewField`.
+
+**There is an escape hatch.** `config('filament-mobile.types')` maps any
+component class onto a type this contract already defines, and host entries win
+over the built-ins:
+
+```php
+// config/filament-mobile.php
+'types' => [
+    \Ysfkaya\FilamentPhoneInput\Forms\PhoneInput::class => 'text',
+    \Filament\Forms\Components\ToggleButtons::class => 'select',
+],
+```
+
+That is how the pilot panel handled its phone-input and icon-picker plugins.
+The constraint is that the value must be a type the contract already defines —
+you can point a new component at an existing renderer, but you cannot invent a
+new one without a change to this package.
 
 ## Actions
 
