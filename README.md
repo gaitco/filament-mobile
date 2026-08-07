@@ -26,6 +26,15 @@ a client is shown and the rules the server enforces cannot drift apart.
 
 ---
 
+## Install
+
+```bash
+composer require gait/filament-mobile
+php artisan vendor:publish --tag=filament-mobile-config
+```
+
+Then apply the two items below, and opt at least one resource in.
+
 ## Read this first: two things that will bite you
 
 Both produce a **working-looking HTTP 200 with an empty or wrong payload**, not
@@ -94,16 +103,7 @@ is almost certainly why. Confirm with `php artisan filament-mobile:doctor`.
 
 ---
 
-## Installation
-
-```bash
-composer require gait/filament-mobile
-php artisan vendor:publish --tag=filament-mobile-config
-```
-
-Then apply the two items above, and opt at least one resource in.
-
-## Opting a resource in
+## Opt a resource in
 
 A Filament resource is invisible to the mobile API until it declares a static
 `mobile()`. That is the safety property: pointing this package at a 200-resource
@@ -164,6 +164,23 @@ fields the infolist names.
 | `searchable(array $columns)` | Plain columns only — a dotted path would need a join and is not supported |
 | `sorts(array $labels)` | `['column' => 'Label']`; the key is spent on the database |
 | `defaultSort(string $key, string $direction = 'asc')` | Must be one of the declared `sorts()` keys |
+
+## What ships
+
+| Feature | What it gives you |
+|---|---|
+| [Resources and cards](#opt-a-resource-in) | Opt in per resource; the card is declared, the form and infolist are read from the resource |
+| [Actions](#actions) | The panel's own record actions, published per record with their authorization already applied |
+| [Upload](#upload) | Single-file `FileUpload` / `SpatieMediaLibraryFileUpload`, with the field's own accept and size rules enforced |
+| [Repeater](#repeater) | JSON-column repeaters, validated per row |
+| [Relations](#relations) | Relation managers as read-only child lists |
+| [Rich text](#rich-text) | `RichEditor` columns as a structured document, sanitised by construction |
+| [Dashboard](#dashboard) | The panel's opted-in widgets, computed live |
+| [Locale and direction](#locale-and-direction) | The panel's own locale and `ltr`/`rtl`, so the phone lays out the way the panel does |
+| [Schema caching](#schema-caching) | An ETag on `/schema` so a cold start is one conditional request |
+
+Everything below is reference. Read the section for the feature you are wiring;
+each ends with a **Known weaknesses** list stating plainly what it does not do.
 
 ## Actions
 
