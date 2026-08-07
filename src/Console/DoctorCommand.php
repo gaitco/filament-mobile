@@ -7,9 +7,18 @@ namespace Gait\FilamentMobile\Console;
 use Filament\Tables\Table;
 use Filament\Tables\TableComponent;
 use Gait\FilamentMobile\Actions\ActionResolver;
+use Gait\FilamentMobile\Dashboard\WidgetReader;
+use Gait\FilamentMobile\Introspection\ChildComponents;
+use Gait\FilamentMobile\Introspection\ComponentTypeMap;
+use Gait\FilamentMobile\Introspection\FieldPersistence;
+use Gait\FilamentMobile\Introspection\RelationDiscovery;
+use Gait\FilamentMobile\Introspection\RichContent;
+use Gait\FilamentMobile\Introspection\WalkWarnings;
 use Gait\FilamentMobile\MobileResource;
 use Gait\FilamentMobile\PanelSchemaBuilder;
 use Gait\FilamentMobile\ResourceRegistry;
+use Gait\FilamentMobile\Upload\UploadFieldResolver;
+use Gait\FilamentMobile\Validation\RuleExtractor;
 use Illuminate\Console\Command;
 use Illuminate\Contracts\Auth\Authenticatable;
 use Illuminate\Database\Eloquent\Model;
@@ -59,17 +68,27 @@ final class DoctorCommand extends Command
         $drift = $this->drift($mobile, $unsupported);
         $unresolvable = $this->unresolvableCardPaths($mobile);
         $actionProblems = $this->actionProblems($mobile);
+        $widgetProblems = $this->widgetProblems();
+        $multiFile = $this->multiFileFields($mobile);
+        $repeaterProblems = $this->repeaterProblems($registry, $builder, $mobile, $panel);
+        $relationRefusals = $this->relationRefusals($registry);
+        $proseCards = $this->proseOnlyCardFields($registry, $mobile, $panel);
 
         $this->exposure($registry, $mobile, $panel);
         $this->section('Unsupported components', [...$unsupported, ...$this->pasteLines($unsupported)]);
         $this->section('Drift between mobile() and table()', [...$drift['actionable'], ...$drift['ignored']]);
         $this->section('Unresolvable card field paths', $unresolvable);
         $this->section('Actions', $actionProblems);
+        $this->section('Widgets', $widgetProblems);
+        $this->section('Multi-file uploads', $multiFile);
+        $this->section('Repeaters', $repeaterProblems);
+        $this->section('Relations', $relationRefusals);
+        $this->section('Rich text on cards', $proseCards);
 
         // A resource nobody could walk is a hole in the gate, not a clean bill
         // of health: CI reads the exit code, not the prose above it.
         $actionable = count($unsupported) + count($drift['actionable'])
-            + count($actionProblems) + count($this->skipped($registry, $mobile, $panel));
+            + count($actionProblems) + count($widgetProblems) + count($this->skipped($registry, $mobile, $panel));
 
         $this->newLine();
         $this->line($actionable === 0
@@ -360,6 +379,328 @@ final class DoctorCommand extends Command
         foreach ($mobile as $class => $resource) {
             foreach ((new ActionResolver($class, $resource))->problems() as $problem) {
                 $lines[] = class_basename($class) . '.' . $problem;
+            }
+        }
+
+        return $lines;
+    }
+
+    /**
+     * Section 6. Configured dashboard widgets that cannot be read at all: no
+     * such class, not a widget, an unsupported kind (only stats/chart ship
+     * this slice), or one whose construction/mount/data read throws.
+     * Actionable, like Actions above — a broken widget declaration is
+     * silently absent from the dashboard payload, exactly the failure this
+     * command exists to make loud.
+     *
+     * `WidgetReader::problems()` deliberately never calls `canView()` — a
+     * widget correctly hidden from this run's user is the system working,
+     * not a misconfiguration — so this section carries no policy-gated
+     * "skipped" caveat the way the resource sections above do.
+     *
+     * @return list<string>
+     */
+    private function widgetProblems(): array
+    {
+        $reader = new WidgetReader(new WalkWarnings());
+        $lines = [];
+
+        foreach (config('filament-mobile.widgets', []) as $class) {
+            // The controller silently skips a non-string entry; doctor's job
+            // is to make dead config loud — and report it, not TypeError out.
+            if (! is_string($class)) {
+                $lines[] = var_export($class, true) . ' in filament-mobile.widgets is not a class-string.';
+
+                continue;
+            }
+
+            $lines = [...$lines, ...$reader->problems($class)];
+        }
+
+        return $lines;
+    }
+
+    /**
+     * Section 7. `FileUpload::multiple()` fields: /schema always publishes
+     * these `readOnly: true` and the upload endpoint always refuses them —
+     * correct for this slice, but silent. Nothing goes to
+     * `PanelSchemaBuilder::warnings()` for a multi-file field the way a
+     * throwing `acceptedFileTypes()`/`maxSize()` does (see
+     * SchemaWalker::config()), because there is nothing wrong with the
+     * panel's declaration, only with this slice's support for it — so
+     * without this section a resource author has no way to learn "this field
+     * cannot be edited from a phone" short of reading the wire payload.
+     *
+     * Informational, like unresolvableCardPaths() above: a panel legitimately
+     * has multi-file fields, and this slice choosing not to support them yet
+     * must not fail CI over it. Not folded into $actionable in handle().
+     *
+     * @param  array<class-string, MobileResource>  $mobile
+     * @return list<string>
+     */
+    private function multiFileFields(array $mobile): array
+    {
+        $lines = [];
+
+        foreach ($mobile as $class => $resource) {
+            foreach ((new UploadFieldResolver($class))->multipleFieldNames() as $field) {
+                $lines[] = class_basename($class) . '.' . $field
+                    . ': FileUpload::multiple() is unsupported this slice — published read-only, refused by the upload endpoint';
+            }
+        }
+
+        return $lines;
+    }
+
+    /**
+     * Section 8. Four repeater shapes this slice legitimately cannot
+     * support — a panel legitimately has these, and the slice simply does
+     * not support them (design spec, "Known weaknesses, stated now"):
+     *
+     *  - `->relationship()`: writes child rows through Filament's own
+     *    saveRelationships(), which this package's write path never calls.
+     *  - a repeater containing a `live()` field: the item template is
+     *    static, so that field's row will not re-settle.
+     *  - a nested repeater: a repeater inside another repeater's item
+     *    template — two levels of row coordinate is a different problem.
+     *  - a repeater one of whose children would not round-trip — a
+     *    `Hidden`, an unmapped type, a `disabled()`/undehydrated field. The
+     *    row array is written whole, so a child with no rule has its key
+     *    DELETED from every row on save; the field is published read-only
+     *    instead, and this is the only place a panel author can learn which
+     *    child cost them the control.
+     *
+     * Informational, like multiFileFields() above: a panel author is not
+     * surprised, but nothing here is wrong with the panel's declaration,
+     * only with this slice's support for it. Never folded into $actionable
+     * in handle().
+     *
+     * `live` and nesting are read off the already-built `$panel` document —
+     * both are published, through the SAME guarded reads SchemaWalker uses.
+     * The other two are read off the components, because `/schema` publishes
+     * only the verdict (`config.readOnly`) and never the reason, and a
+     * finding that cannot name the offending child is not worth printing.
+     *
+     * @param  array<class-string, MobileResource>  $mobile
+     * @param  array<string, mixed>  $panel
+     * @return list<string>
+     */
+    private function repeaterProblems(ResourceRegistry $registry, PanelSchemaBuilder $builder, array $mobile, array $panel): array
+    {
+        $lines = [];
+        $byKey = [];
+
+        foreach ($panel['resources'] ?? [] as $resource) {
+            if (is_array($resource) && is_string($resource['key'] ?? null)) {
+                $byKey[$resource['key']] = $resource;
+            }
+        }
+
+        foreach (array_keys($mobile) as $class) {
+            $document = $byKey[$registry->keyFor($class)] ?? null;
+
+            // Absent means viewAny denied this run — the same "not inspected"
+            // case skipped() reports elsewhere; nothing was walked, so there
+            // is nothing to check here either.
+            if ($document === null) {
+                continue;
+            }
+
+            $short = class_basename($class);
+
+            $this->walkRepeaterNodes($document['form'] ?? [], $short, false, $lines);
+            $this->refusedRepeaters($builder->schemaComponents($class, 'form'), $short, $lines);
+        }
+
+        return $lines;
+    }
+
+    /**
+     * The two refusals only the components can explain: a relationship
+     * repeater, and one whose item template holds a child that would not
+     * round-trip.
+     *
+     * A repeater the write path refuses outright (`disabled()`, never
+     * dehydrated) is skipped for the child finding — every child of a
+     * disabled container reads as disabled too, so it would report a child
+     * as the cause when the container is. It is still reported when it is a
+     * relationship repeater, which is refused for that reason first.
+     *
+     * @param  iterable<mixed>  $components
+     * @param  list<string>  $lines
+     */
+    private function refusedRepeaters(iterable $components, string $resourceName, array &$lines): void
+    {
+        foreach ($components as $component) {
+            if (! is_object($component)) {
+                continue;
+            }
+
+            if (ComponentTypeMap::for($component) === 'repeater') {
+                $label = $resourceName . '.' . ($this->componentName($component) ?? '?');
+
+                if (FieldPersistence::refusesRelationship($component)) {
+                    $lines[] = $label . ': Repeater::relationship() is unsupported this slice — writes child rows through Filament\'s own saveRelationships(), which this package\'s write path never calls';
+                } elseif (! FieldPersistence::refuses($component)) {
+                    $withheld = RuleExtractor::withheldChild(ChildComponents::of($component));
+
+                    if ($withheld !== null) {
+                        $lines[] = $label . ': child `' . $withheld . '` would not round-trip (hidden, unmapped, disabled or never dehydrated), so the whole repeater is published read-only — writing the array would delete that key from every row';
+                    }
+                }
+            }
+
+            $this->refusedRepeaters(ChildComponents::of($component), $resourceName, $lines);
+        }
+    }
+
+    private function componentName(object $component): ?string
+    {
+        if (! method_exists($component, 'getName')) {
+            return null;
+        }
+
+        try {
+            $name = $component->getName();
+        } catch (Throwable) {
+            return null;
+        }
+
+        return is_string($name) ? $name : null;
+    }
+
+    /**
+     * @param  list<array<string, mixed>>  $nodes
+     * @param  list<string>  $lines
+     */
+    private function walkRepeaterNodes(array $nodes, string $resourceName, bool $insideRepeater, array &$lines): void
+    {
+        foreach ($nodes as $node) {
+            $isRepeater = ($node['type'] ?? null) === 'repeater';
+            $label = $resourceName . '.' . ($node['name'] ?? '?');
+
+            if ($isRepeater && $insideRepeater) {
+                $lines[] = $label . ': nested repeater — a repeater inside a repeater is unsupported this slice';
+            }
+
+            if ($isRepeater && $this->containsLive($node['children'] ?? [])) {
+                $lines[] = $label . ': contains a live() field — its row will not re-settle, the item template is static';
+            }
+
+            $this->walkRepeaterNodes($node['children'] ?? [], $resourceName, $insideRepeater || $isRepeater, $lines);
+        }
+    }
+
+    /** @param  list<array<string, mixed>>  $nodes */
+    private function containsLive(array $nodes): bool
+    {
+        foreach ($nodes as $node) {
+            if (($node['live'] ?? false) === true || $this->containsLive($node['children'] ?? [])) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Section 9. Relation managers `RelationDiscovery` refused, and why —
+     * the only channel that explains why a relation manager the panel
+     * declares never reaches `/schema`. Every entry `getRelations()`
+     * returns ends up here or in a published relation; nothing is silently
+     * dropped.
+     *
+     * Informational, like unresolvableCardPaths() above: a refusal is this
+     * package correctly declining to approximate a relation it cannot
+     * reproduce outside Livewire, not a defect in the panel's own
+     * declaration. Never folded into $actionable in handle().
+     *
+     * Over `allResourceClasses()`, not `$mobile`: a resource's relations can
+     * be refused whether or not the resource itself opted into mobile() —
+     * the panel author still benefits from knowing why.
+     *
+     * One line per refusal, `Resource.Manager: reason` — the same shape
+     * every other section in this file uses. Testbench's
+     * `expectsOutputToContain()` mocks `doWrite` per line and lets exactly
+     * one expectation claim each call, so a test asserting two substrings
+     * that both land in one line must do it with a SINGLE compound-substring
+     * call (see `DoctorRelationsTest.php`), not two chained calls — the
+     * existing `RepeaterProblemResource.rel_rows: Repeater::relationship()`-
+     * style assertions elsewhere in `DoctorCommandTest.php` already follow
+     * this.
+     *
+     * @return list<string>
+     */
+    private function relationRefusals(ResourceRegistry $registry): array
+    {
+        $lines = [];
+        $mobile = $registry->mobileResources();
+
+        foreach ($registry->allResourceClasses() as $class) {
+            if (! is_string($class)) {
+                continue;
+            }
+
+            // The resource's own MobileResource when it has one: a relation's
+            // card — and therefore whether it is publishable at all — depends
+            // on the host's `relationCard()` declarations, so discovery cannot
+            // answer without them. A resource that never opted into mobile()
+            // passes null and gets the derived-card answer, which is still the
+            // useful one for the panel author.
+            foreach (RelationDiscovery::refusalsFor($class, $mobile[$class] ?? null) as $manager => $reason) {
+                $lines[] = class_basename($class) . '.' . class_basename($manager) . ': ' . $reason;
+            }
+        }
+
+        return $lines;
+    }
+
+    /**
+     * Section 10. A card slot bound to a column that is rich ONLY because one
+     * infolist entry calls `->prose()`.
+     *
+     * `->prose()` is a declaration about that one entry; `HasRichContent` is a
+     * fact about the column. Only the column-level fact can honestly reach a
+     * card, which is a different surface no infolist entry governs — and
+     * `index()` would have to build and walk the infolist on every list request
+     * to know otherwise, a cost it exists to avoid. So such a card slot gets
+     * `<path>.__rich` on `show()` and none on `index()`, and the list card
+     * renders raw markup.
+     *
+     * Nothing else tells the panel author why one card slot came out clean and
+     * the one beside it did not: `/schema` publishes the card's field paths,
+     * not which of them convert. Informational, like `multiFileFields()` — the
+     * declaration is legal, this slice simply cannot honour it on a card — so
+     * it is never folded into `$actionable` in handle().
+     *
+     * @param  array<class-string, MobileResource>  $mobile
+     * @param  array<string, mixed>  $panel
+     * @return list<string>
+     */
+    private function proseOnlyCardFields(ResourceRegistry $registry, array $mobile, array $panel): array
+    {
+        $lines = [];
+        $byKey = array_column($panel['resources'] ?? [], null, 'key');
+
+        foreach ($mobile as $class => $resource) {
+            // Absent means viewAny denied this run — nothing was walked, so
+            // there is nothing to check. Same case skipped() reports.
+            $document = $byKey[$registry->keyFor($class)] ?? null;
+
+            if ($document === null) {
+                continue;
+            }
+
+            $proseOnly = array_diff(
+                RichContent::entryNamesIn($document['infolist'] ?? []),
+                RichContent::attributesFor($class::getModel()),
+            );
+
+            foreach (array_intersect($resource->getCard()->fieldPaths(), $proseOnly) as $path) {
+                $lines[] = class_basename($class) . ': card field `' . $path
+                    . '` is rich only because the infolist calls ->prose(), so the list endpoint publishes no `'
+                    . $path . '.__rich` and the card renders raw markup — register it on '
+                    . class_basename($class::getModel()) . ' with HasRichContent to fix it';
             }
         }
 

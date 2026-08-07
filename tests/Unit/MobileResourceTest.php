@@ -15,6 +15,17 @@ it('configures a card through the callable', function () {
     ]);
 });
 
+it('configures a relation card through the closure and keys it by relation', function () {
+    $resource = MobileResource::make()
+        ->relationCard('contacts', fn (MobileCard $card) => $card->title('name'));
+
+    expect($resource->getRelationCard('contacts')?->toArray())->toBe(['title' => ['field' => 'name']]);
+});
+
+it('has no relation card for a key nothing declared', function () {
+    expect(MobileResource::make()->getRelationCard('contacts'))->toBeNull();
+});
+
 it('is valid with nothing declared', function () {
     $resource = MobileResource::make();
 

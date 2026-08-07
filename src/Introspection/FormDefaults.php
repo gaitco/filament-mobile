@@ -95,7 +95,19 @@ final class FormDefaults
         }
 
         $name = self::read($component, 'getName');
-        $default = self::read($component, 'getDefaultState');
+
+        // `repeater` is withheld the same way SchemaWalker withholds it from
+        // `/schema` (see that class for the full account): Repeater::setUp()
+        // unconditionally calls defaultItems(1), whose default() override
+        // keys its one blank item under a FRESHLY GENERATED random UUID on
+        // every evaluation. Unlike the walker's copy, which only costs the
+        // ETag, this one feeds $model::create() directly via
+        // MobilePanelController::fillMissingPaths() — guarding only the
+        // validated payload guards nothing (this class's own docblock). Left
+        // unguarded, an ordinary create that never mentions the repeater
+        // writes `{"<uuid>": []}` — a dict, not the list-of-maps shape the
+        // design spec documents — into the column, non-deterministically.
+        $default = $type === 'repeater' ? null : self::read($component, 'getDefaultState');
 
         if (! is_string($name) || $name === '' || $default === null) {
             return [];

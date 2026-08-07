@@ -194,6 +194,47 @@ final class FieldPersistence
     }
 
     /**
+     * Whether a repeater's rows belong to a RELATIONSHIP rather than to a
+     * column of the record — or whether that cannot be answered at all, which
+     * refuses the same way.
+     *
+     * Asked only of a repeater. It is deliberately not a general predicate: a
+     * component with no `getRelationship()` at all lands in the refusal
+     * ("nothing declared these rows writable"), which is the right answer for
+     * a repeater and the wrong one for a TextInput.
+     *
+     * One implementation, two callers, and that is the point. `SchemaWalker`
+     * publishes the answer as `config.readOnly` and `RuleExtractor` withholds
+     * the field's rules and its writable name on it, so the published flag and
+     * the write path cannot disagree. They DID disagree before this existed:
+     * `Repeater::relationship()->dehydrated(true)` overrode the literal-false
+     * dehydration `savesViaRelationship()` misclassifies as singular, so the
+     * node said `readOnly: true` while `WritableNames` admitted the name, and
+     * a crafted payload reached `update()` as a column that does not exist —
+     * a QueryException, i.e. a 500 on crafted input.
+     *
+     * `$error` is an out-parameter rather than a second method so the walker
+     * can warn — with the real message — about a gate that errored, without
+     * evaluating the gate twice.
+     */
+    public static function refusesRelationship(object $component, ?Throwable &$error = null): bool
+    {
+        $error = null;
+
+        if (! method_exists($component, 'getRelationship')) {
+            return true;
+        }
+
+        try {
+            return $component->getRelationship() !== null;
+        } catch (Throwable $e) {
+            $error = $e;
+
+            return true;
+        }
+    }
+
+    /**
      * Whether `->dehydrated(false)` was called with a literal `false` rather
      * than a closure.
      *

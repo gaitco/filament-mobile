@@ -53,6 +53,16 @@ function flattenNodes(array $nodes): array
 }
 
 it('emits every key the frozen Dart parser reads', function () {
+    // `relations` is asserted at resource granularity below (P6d Task 5's
+    // gap-close: a new wire key with no field-granularity coverage is
+    // exactly the miss this test exists to catch), not flattened here.
+    // flattenNodes() walks `children`, and a relation entry — `{key, label,
+    // card}` — is not a component: it has none of a node's shape
+    // (type/name/label/helperText/hidden/disabled/live/rules) and no
+    // `children` to recurse into. Asserting the node-key list against a
+    // relation would be a type mismatch, not coverage. The relation entry's
+    // own shape is covered where it belongs: RelationSchemaTest.php here,
+    // and laravel_contract_test.dart on the Dart side.
     $document = snapshotDocument();
 
     expect($document)->toHaveKeys(['version', 'panel', 'resources'])
@@ -63,7 +73,7 @@ it('emits every key the frozen Dart parser reads', function () {
     foreach ($document['resources'] as $resource) {
         expect($resource)->toHaveKeys([
             'key', 'labels', 'permissions', 'recordKey',
-            'card', 'search', 'sorts', 'filters', 'form', 'infolist',
+            'card', 'search', 'sorts', 'filters', 'relations', 'form', 'infolist',
         ]);
 
         $nodes = [

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Gait\FilamentMobile;
 
+use Closure;
 use InvalidArgumentException;
 
 /**
@@ -18,6 +19,9 @@ use InvalidArgumentException;
 final class MobileResource
 {
     private MobileCard $card;
+
+    /** @var array<string, MobileCard> relation key => card */
+    private array $relationCards = [];
 
     /** @var list<string> */
     private array $searchable = [];
@@ -48,6 +52,57 @@ final class MobileResource
         $this->card = $configure(MobileCard::make());
 
         return $this;
+    }
+
+    /**
+     * The host's override for a relation manager's card, for when
+     * `RelationCard::fromColumns()` derives nothing usable. Same eager
+     * closure-configure pattern as `card()`.
+     *
+     * A closure that returns something other than a card is refused here
+     * rather than stored: `fn ($card) => $card->title('name');` with a
+     * trailing semicolon inside a block body returns null, which used to be
+     * stored, read back as "the host declared nothing", and silently replaced
+     * by the derived card — the author's declaration never read and nothing
+     * anywhere saying so. `defaultSort()` refuses its own misdeclaration the
+     * same way, at declaration time, where the stack trace still names the
+     * resource.
+     *
+     * A key naming no relation, and a card that fills no slot, are the two
+     * misdeclarations this cannot catch here — the first needs the resource's
+     * `getRelations()` and the second is legal until something has to render
+     * it. `RelationDiscovery` refuses both and `doctor` names them.
+     */
+    public function relationCard(string $key, Closure $configure): self
+    {
+        $card = $configure(MobileCard::make());
+
+        if (! $card instanceof MobileCard) {
+            throw new InvalidArgumentException(
+                "relationCard('{$key}') must return the MobileCard it was given, got "
+                . get_debug_type($card) . '.',
+            );
+        }
+
+        $this->relationCards[$key] = $card;
+
+        return $this;
+    }
+
+    public function getRelationCard(string $key): ?MobileCard
+    {
+        return $this->relationCards[$key] ?? null;
+    }
+
+    /**
+     * Every key `relationCard()` was called with — what `RelationDiscovery`
+     * checks against the relations the resource actually declares.
+     *
+     * @return list<string>
+     */
+    public function getRelationCardKeys(): array
+    {
+        return array_keys($this->relationCards);
     }
 
     /** @param list<string> $columns */

@@ -6,8 +6,12 @@ use Gait\FilamentMobile\Tests\Fixtures\Resources\BannerResource;
 use Illuminate\Contracts\Auth\Authenticatable;
 use Illuminate\Support\Facades\Gate;
 use Gait\FilamentMobile\Tests\Fixtures\Resources\DriftResource;
+use Gait\FilamentMobile\Tests\Fixtures\Resources\MultiFileResource;
 use Gait\FilamentMobile\Tests\Fixtures\Resources\PostResource;
+use Gait\FilamentMobile\Tests\Fixtures\Resources\RepeaterProblemResource;
+use Gait\FilamentMobile\Tests\Fixtures\Resources\RichResource;
 use Gait\FilamentMobile\Tests\Fixtures\Resources\SecretResource;
+use Gait\FilamentMobile\Tests\Fixtures\Widgets\PlainTableWidget;
 
 beforeEach(function () {
     // DriftResource is added here rather than to the shared fixture list so
@@ -110,6 +114,109 @@ it('fails without inspecting anything when --user names nobody', function () {
         ->assertExitCode(1);
 });
 
+it('reports a configured widget class that does not exist', function () {
+    // Isolated from the DriftResource/BannerResource findings the shared
+    // beforeEach() config produces, so a genuine RED here cannot be masked
+    // by an exit code that was already 1 for an unrelated reason.
+    config()->set('filament-mobile.resources', [PostResource::class]);
+    config()->set('filament-mobile.widgets', ['Gait\\FilamentMobile\\Tests\\Fixtures\\Widgets\\NoSuchWidget']);
+
+    $this->artisan('filament-mobile:doctor')
+        ->expectsOutputToContain('no such class')
+        ->assertExitCode(1);
+});
+
+it('reports a non-string widget config entry instead of crashing the run', function () {
+    // The controller silently skips it; doctor exists to make exactly this
+    // kind of dead config loud — and a TypeError would kill the whole run.
+    config()->set('filament-mobile.resources', [PostResource::class]);
+    config()->set('filament-mobile.widgets', [123]);
+
+    $this->artisan('filament-mobile:doctor')
+        ->expectsOutputToContain('not a class-string')
+        ->assertExitCode(1);
+});
+
+it('reports a configured widget that is neither stats nor chart', function () {
+    config()->set('filament-mobile.resources', [PostResource::class]);
+    config()->set('filament-mobile.widgets', [PlainTableWidget::class]);
+
+    $this->artisan('filament-mobile:doctor')
+        ->expectsOutputToContain('neither a stats nor a chart widget')
+        ->assertExitCode(1);
+});
+
+it('reports a FileUpload::multiple() field as unsupported this slice', function () {
+    // BannerResource declares `gallery` as FileUpload::make('gallery')->multiple().
+    // Assert on wording unique to this section — 'FileUpload::multiple()'
+    // appears nowhere else doctor prints for this fixture set, unlike the
+    // bare 'ghost' the 'no such action' test above had to guard against for
+    // the same reason (DriftResource's unrelated `ghost.name` path already
+    // contained it).
+    $this->artisan('filament-mobile:doctor')
+        ->expectsOutputToContain('BannerResource.gallery: FileUpload::multiple()');
+});
+
+it('does not fail CI over a multi-file field alone — it is informational', function () {
+    config()->set('filament-mobile.resources', [MultiFileResource::class]);
+
+    $this->artisan('filament-mobile:doctor')
+        ->expectsOutputToContain('MultiFileResource.photos: FileUpload::multiple()')
+        ->assertExitCode(0);
+});
+
+it('reports a relationship repeater as unsupported this slice, informationally', function () {
+    // Assert on wording unique to this section, the same discipline the
+    // 'no such action' test above documents: 'RepeaterProblemResource' names
+    // nothing DriftResource or BannerResource's OWN findings would ever
+    // print, and 'Repeater::relationship()' appears nowhere else doctor
+    // prints for this fixture set.
+    config()->set('filament-mobile.resources', [RepeaterProblemResource::class]);
+
+    $this->artisan('filament-mobile:doctor')
+        ->expectsOutputToContain('RepeaterProblemResource.rel_rows: Repeater::relationship()')
+        ->assertExitCode(0);
+});
+
+it('reports a repeater containing a live() field, informationally', function () {
+    config()->set('filament-mobile.resources', [RepeaterProblemResource::class]);
+
+    $this->artisan('filament-mobile:doctor')
+        ->expectsOutputToContain('RepeaterProblemResource.live_rows: contains a live() field')
+        ->assertExitCode(0);
+});
+
+it('reports a nested repeater, informationally', function () {
+    config()->set('filament-mobile.resources', [RepeaterProblemResource::class]);
+
+    $this->artisan('filament-mobile:doctor')
+        ->expectsOutputToContain('RepeaterProblemResource.inner_rows: nested repeater')
+        ->assertExitCode(0);
+});
+
+it('names the child that cost a repeater its editability, informationally', function () {
+    // The finding that loses user data if it goes unreported: a `Hidden` in
+    // a row template is dropped by ComponentTypeMap, so no rule names it and
+    // the whole-array write deletes it from every row. Naming the CHILD is
+    // the point — `readOnly: true` on the wire says the control is gone, and
+    // nothing else says why.
+    config()->set('filament-mobile.resources', [RepeaterProblemResource::class]);
+
+    $this->artisan('filament-mobile:doctor')
+        ->expectsOutputToContain('RepeaterProblemResource.guarded_rows: child `id` would not round-trip')
+        ->assertExitCode(0);
+});
+
+it('does not report the outer half of a nested repeater as nested itself', function () {
+    // Only the INNER repeater is inside another repeater's item template;
+    // the outer one is an ordinary top-level repeater and must not also be
+    // flagged.
+    config()->set('filament-mobile.resources', [RepeaterProblemResource::class]);
+
+    $this->artisan('filament-mobile:doctor')
+        ->doesntExpectOutputToContain('outer_rows: nested repeater');
+});
+
 it('refuses to report clean when policies hid every resource from the console', function () {
     // Nothing was walked, so nothing was inspected: a green CI run here would
     // certify a panel no one looked at.
@@ -121,4 +228,37 @@ it('refuses to report clean when policies hid every resource from the console', 
     $this->artisan('filament-mobile:doctor')
         ->expectsOutputToContain('Not inspected')
         ->assertExitCode(1);
+});
+
+it('names a card bound to a column only an infolist entry called prose on', function () {
+    // A card slot over such a column renders raw markup on the list screen —
+    // `->prose()` governs one infolist entry, so index() publishes no
+    // `<path>.__rich` for it (RichPayloadTest pins that). The panel author
+    // has no other way to learn why one card slot came out clean and the one
+    // beside it did not.
+    //
+    // Informational, like the multi-file and repeater sections: the panel's
+    // declaration is legal, this slice simply cannot honour it on a card.
+    config()->set('filament-mobile.resources', [RichResource::class]);
+
+    // Exit 1, but NOT because of this section: RichResource's `exploding_body`
+    // entry has a throwing ->prose() gate, which the walker warns about, and
+    // that single warning is the run's one actionable finding. Asserting the
+    // count is what proves this section stayed informational — an
+    // assertExitCode(0) here would be unprovable against this fixture, and
+    // dropping the exit assertion entirely would prove nothing at all.
+    $this->artisan('filament-mobile:doctor')
+        ->expectsOutputToContain('RichResource: card field `prose_note` is rich only because the infolist calls ->prose()')
+        ->expectsOutputToContain('1 actionable finding(s).')
+        ->assertExitCode(1);
+});
+
+it('does not name a card bound to a column the model itself declares rich', function () {
+    // `body_html` is on the same card and IS published with a sibling, so a
+    // check that flagged every rich card field would be noise a panel author
+    // learns to ignore.
+    config()->set('filament-mobile.resources', [RichResource::class]);
+
+    $this->artisan('filament-mobile:doctor')
+        ->doesntExpectOutputToContain('card field `body_html`');
 });

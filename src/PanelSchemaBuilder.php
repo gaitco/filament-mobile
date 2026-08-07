@@ -8,10 +8,12 @@ use BackedEnum;
 use Filament\Schemas\Schema;
 use Filament\Support\Contracts\HasLabel;
 use Gait\FilamentMobile\Introspection\HeadlessSchemaHost;
+use Gait\FilamentMobile\Introspection\RelationDiscovery;
 use Gait\FilamentMobile\Introspection\SafeEvaluator;
 use Gait\FilamentMobile\Introspection\SchemaWalker;
 use Gait\FilamentMobile\Introspection\WalkWarnings;
 use Illuminate\Contracts\Auth\Authenticatable;
+use Illuminate\Database\Eloquent\Model;
 use Throwable;
 use UnitEnum;
 
@@ -47,6 +49,18 @@ final class PanelSchemaBuilder
             'panel' => [
                 'id' => 'mobile',
                 'title' => config('app.name'),
+                'locale' => app()->getLocale(),
+                // Filament's own answer, from the same `layout.direction` key
+                // its web panel lays itself out with — so the phone and the
+                // panel agree by construction rather than by this package
+                // maintaining a locale table it would have to keep current.
+                //
+                // The `filament-panels` namespace, NOT `filament::`: measured,
+                // `filament::layout.direction` does not resolve and returns
+                // the raw key, while `filament-panels::` returns 'ltr'/'rtl'.
+                // The two are one character class apart and the wrong one
+                // fails silently, leaving every panel stuck on ltr.
+                'direction' => self::direction(),
             ],
             'resources' => $resources,
         ];
@@ -55,6 +69,28 @@ final class PanelSchemaBuilder
     public function warnings(): WalkWarnings
     {
         return $this->warnings;
+    }
+
+    /**
+     * The closed set a client can act on: exactly 'ltr' or 'rtl'. A throwing
+     * translator degrades to 'ltr' rather than failing the whole document,
+     * and anything other than the literal 'rtl' — including a panel that
+     * overrode the key with nonsense — normalises to the safe answer.
+     *
+     * Public and static: two callers now share this one body —
+     * `build()` above and `DashboardController`, whose own `GET /dashboard`
+     * carries no schema and no `$this` to call an instance method on. A rule
+     * written twice is the P6d defect shape; this stays written once.
+     */
+    public static function direction(): string
+    {
+        try {
+            $direction = __('filament-panels::layout.direction');
+        } catch (Throwable) {
+            return 'ltr';
+        }
+
+        return $direction === 'rtl' ? 'rtl' : 'ltr';
     }
 
     /** @return array<string, mixed> */
@@ -104,8 +140,11 @@ final class PanelSchemaBuilder
             // there is nothing to introspect and nothing to test. The key stays
             // because the contract defines it and the client expects a list.
             'filters' => [],
-            'form' => $walker->walk($this->schemaComponents($class, 'form'), $short, $key),
-            'infolist' => $walker->walk($this->schemaComponents($class, 'infolist'), $short, $key),
+            // Always present, even when empty, so a client never has to
+            // branch on the key's absence — the same reason `filters` stays.
+            'relations' => $this->relations($class, $mobile),
+            'form' => $walker->walk($this->schemaComponents($class, 'form'), $short, $key, $model),
+            'infolist' => $walker->walk($this->schemaComponents($class, 'infolist'), $short, $key, $model),
         ];
 
         // string | UnitEnum | null — Filament permits a backed enum here
@@ -119,6 +158,56 @@ final class PanelSchemaBuilder
         }
 
         return $block;
+    }
+
+    /** @return list<array<string, mixed>> */
+    private function relations(string $class, MobileResource $mobile): array
+    {
+        $blocks = [];
+        $model = new ($class::getModel())();
+
+        // The card comes from discovery, not from a second resolution here.
+        // This method used to resolve it itself and `continue` on null, and
+        // `RelationController` did the same a few lines apart — two copies of
+        // "no card ⇒ no relation", both testing nullness, both waving through
+        // the empty-but-non-null card `relationCard('key', fn ($c) => $c)`
+        // builds. Discovery decides once, and its refusal reaches `doctor`.
+        foreach (RelationDiscovery::for($class, $mobile) as $relation) {
+            $blocks[] = [
+                'key' => $relation['key'],
+                'label' => $relation['label'],
+                'card' => $relation['card']->toArray(),
+                'recordKey' => $this->recordKeyFor($model, $relation['key']),
+            ];
+        }
+
+        return $blocks;
+    }
+
+    /**
+     * The CHILD model's own route key — mirrors line 96's `recordKey` for the
+     * resource itself, but for the relation's related model, which is
+     * routinely a different class with a different key (a slug- or
+     * uuid-routed child is ordinary in a Filament panel). `RelationController`
+     * already derives this correctly per-request via a fetched record's live
+     * relationship (`$related->getRouteKeyName()`); here there is no record
+     * yet; an unsaved instance of the resource's own model stands in —
+     * *building* a relationship never queries the row that does not exist,
+     * so this is safe on an unsaved model.
+     *
+     * Falls back to `id` on any failure, same as an absent key does on the
+     * Dart side (`RelationDescriptor.fromJson`) — a relation whose
+     * relationship cannot even be built here would already have been refused
+     * by `RelationDiscovery`, so this is a defensive fallback, not an
+     * expected path.
+     */
+    private function recordKeyFor(Model $model, string $relationName): string
+    {
+        try {
+            return $model->{$relationName}()->getRelated()->getRouteKeyName();
+        } catch (Throwable) {
+            return 'id';
+        }
     }
 
     /**
@@ -192,10 +281,16 @@ final class PanelSchemaBuilder
      * measured that as an empty `options` array on 6 resources' required
      * foreign keys — a picker with nothing in it, which no client can submit.
      *
+     * Public for `DoctorCommand`, which reports on the components themselves
+     * rather than on the published document: `/schema` deliberately does not
+     * carry WHY a repeater is read-only, and doctor has to name the offending
+     * child. It is the same build the walk reads, so the two cannot describe
+     * different forms.
+     *
      * @param  class-string  $class
      * @return list<object>
      */
-    private function schemaComponents(string $class, string $method): array
+    public function schemaComponents(string $class, string $method): array
     {
         try {
             return $class::{$method}(

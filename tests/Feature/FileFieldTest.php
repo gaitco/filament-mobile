@@ -13,9 +13,13 @@ it('leaves an existing file untouched when the update omits it', function () {
     expect($banner->fresh()->avatar)->toBe('original.jpg');
 });
 
-it('ignores a file key a client sends anyway', function () {
-    // Upload is P6. A client that submits one must not be able to overwrite or
-    // clear the stored value by accident or on purpose.
+it('writes a file key a client sends, now that a single-file field carries a rule', function () {
+    // P6a: `avatar` is single-file, so RuleExtractor now emits a rule for it
+    // and it is an ordinary writable string column like any other leaf — the
+    // path the upload endpoint hands back saves through this unmodified
+    // write path (see Upload\UploadFieldResolver). An explicit null is the
+    // same "explicit answer" every other nullable field honours: see
+    // MobilePanelController::fillMissingPaths().
     $banner = seedBanner();
     $banner->update(['avatar' => 'original.jpg']);
 
@@ -27,26 +31,28 @@ it('ignores a file key a client sends anyway', function () {
         ])
         ->assertOk();
 
-    expect($banner->fresh()->avatar)->toBe('original.jpg');
+    expect($banner->fresh()->avatar)->toBeNull();
 });
 
-it('ignores a file key on create', function () {
+it('writes a file key on create, now that a single-file field carries a rule', function () {
     $this->actingAs(makeUser('admin'))
         ->postJson('/api/mobile-panel/banners', [
             'name' => 'اسم',
             'body_html' => '<p>Body</p>',
-            'avatar' => 'attacker.jpg',
+            'avatar' => 'some/path.jpg',
         ])
         ->assertCreated();
 
     expect(Gait\FilamentMobile\Tests\Fixtures\Models\Banner::query()
-        ->latest('id')->first()->avatar)->toBeNull();
+        ->latest('id')->first()->avatar)->toBe('some/path.jpg');
 });
 
-it('still publishes the file field to the client, read-only', function () {
-    // The value is never written, but the field is not dropped either: a form
+it('publishes the file field to the client as writable, now that its value is written', function () {
+    // P6a: `avatar` is single-file, so /schema stopped lying about it in
+    // step with RuleExtractor (Task 1) and the write tests above — a form
     // that silently lost its image field would be the `icon_entry` mistake
-    // again — a component one side knows about and the other never sees.
+    // again, and a field /schema calls read-only while the write path
+    // genuinely saves it is the same mistake with the sign flipped.
     $resources = $this->actingAs(makeUser('admin'))
         ->getJson('/api/mobile-panel/schema')
         ->json('resources');
@@ -55,5 +61,5 @@ it('still publishes the file field to the client, read-only', function () {
     $avatar = collect($banners['form'])->firstWhere('name', 'avatar');
 
     expect($avatar['type'])->toBe('file')
-        ->and($avatar['config']['readOnly'])->toBeTrue();
+        ->and($avatar['config']['readOnly'])->toBeFalse();
 });

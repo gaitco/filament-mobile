@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Gait\FilamentMobile\Introspection;
 
 use Error;
+use Gait\FilamentMobile\Validation\RuleExtractor;
 use Throwable;
 
 /**
@@ -37,12 +38,35 @@ final class SchemaWalker
      * MobilePanelController) already holds the registry and passes the true
      * key explicitly.
      *
+     * `$model` is the resource's model class, consulted only by
+     * `isRich()`'s model-declared half (Task 2). Optional, and deliberately
+     * NOT stored as constructor state: PanelSchemaBuilder reuses one
+     * SchemaWalker across every resource in the panel, each with a different
+     * model, so it has to travel through the call the same way `$resource`
+     * and `$resourceKey` do. Absent for every bare-component-list unit test,
+     * which then gets today's behaviour — no model-declared upgrade, same as
+     * before this parameter existed.
+     *
      * @param  iterable<object>  $components
      * @return list<array<string, mixed>>
      */
-    public function walk(iterable $components, string $resource, ?string $resourceKey = null): array
+    public function walk(iterable $components, string $resource, ?string $resourceKey = null, ?string $model = null): array
     {
-        $resourceKey ??= $resource;
+        return $this->walkNodes($components, $resource, $resourceKey ?? $resource, false, $model);
+    }
+
+    /**
+     * `$insideRepeater` is the one piece of context a node needs from its
+     * ancestors: a repeater nested inside another repeater's item template is
+     * published `readOnly: true` (see config()), and only the descent knows
+     * that it is nested. Threaded rather than published, because it is a fact
+     * about where the component sits, not about the component.
+     *
+     * @param  iterable<object>  $components
+     * @return list<array<string, mixed>>
+     */
+    private function walkNodes(iterable $components, string $resource, string $resourceKey, bool $insideRepeater, ?string $model = null): array
+    {
         $nodes = [];
 
         foreach ($components as $component) {
@@ -63,7 +87,7 @@ final class SchemaWalker
             }
 
             try {
-                $nodes[] = $this->node($component, $type, $resource, $resourceKey);
+                $nodes[] = $this->node($component, $type, $resource, $resourceKey, $insideRepeater, $model);
             } catch (Throwable $e) {
                 // SafeEvaluator guards each *accessor call* and
                 // PanelSchemaBuilder guards schema *construction*, but until
@@ -141,12 +165,12 @@ final class SchemaWalker
     }
 
     /** @return array<string, mixed> */
-    private function node(object $component, string $type, string $resource, string $resourceKey): array
+    private function node(object $component, string $type, string $resource, string $resourceKey, bool $insideRepeater = false, ?string $model = null): array
     {
         $name = $this->nameOf($component, $resource);
 
         $node = [
-            'type' => $this->refineType($component, $type, $resource),
+            'type' => $this->refineType($component, $type, $resource, $model),
             'name' => $name,
             // A Section carries its title as a *heading*, not a label — it uses
             // both HasHeading and HasLabel, and getLabel() stays null. Section
@@ -172,19 +196,23 @@ final class SchemaWalker
 
         // `disabled` says what the panel decided; `writable` says what this
         // package can persist. They are different questions — a panel-disabled
-        // field is perfectly persistable, and a file field is not disabled at
-        // all — and conflating them is what made the multi-valued relationship
-        // flag a lie rather than a limitation. Absent means writable.
+        // field is perfectly persistable, and a single-file field is not
+        // disabled at all — and conflating them is what made the multi-valued
+        // relationship flag a lie rather than a limitation. Absent means
+        // writable.
         //
         // `file` is checked by type, not by FieldPersistence::neverPersists():
         // an ordinary FileUpload dehydrates and has no relationship, so the
-        // component-level predicate has nothing to catch here. Its refusal is
-        // Upload being P6 (see config(), which already emits readOnly for the
-        // same reason) and RuleExtractor already withholds its rule by this
-        // same type check — this mirrors that, rather than teaching
-        // FieldPersistence about a Filament type name, which would also flip
-        // `disabled` above via the OR it already participates in.
-        if ($node['type'] === 'file' || FieldPersistence::neverPersists($component)) {
+        // component-level predicate has nothing to catch here. Only MULTIPLE
+        // stays unwritable — RuleExtractor withholds its rule for the same
+        // reason (nowhere to save more than one path per column). A
+        // single-file field carries a rule since P6a and is an ordinary
+        // writable string column: its stored value is the path the upload
+        // endpoint hands back, saved by the unmodified write path. See
+        // config(), which publishes the same distinction as readOnly, and
+        // isMultipleFile() below — the one read both places share, so the
+        // two cannot drift the way they did before this task.
+        if ($this->isMultipleFile($component, $node['type'], $resource, $name) || FieldPersistence::neverPersists($component)) {
             $node['writable'] = false;
         }
 
@@ -199,23 +227,45 @@ final class SchemaWalker
         // warning, never the request. Absent when the component declares
         // none — a null default and no default are different answers to the
         // client.
-        $default = $this->read($component, 'getDefaultState', $resource, $name, 'default', null);
+        //
+        // `repeater` is withheld entirely, not just read: Repeater::setUp()
+        // unconditionally calls defaultItems(1), and its default() override
+        // keys every item under a FRESHLY GENERATED random UUID on every
+        // single evaluation (Repeater::generateUuid(), verified empirically —
+        // two successive /schema calls for the same user produced two
+        // different UUIDs for the same field). Publishing that would make
+        // `default` — and so the whole document's ETag — different on every
+        // request, and the keyed-by-uuid shape isn't the list shape a
+        // repeater's value travels as (design spec) regardless.
+        if ($node['type'] !== 'repeater') {
+            $default = $this->read($component, 'getDefaultState', $resource, $name, 'default', null);
 
-        if ($default !== null) {
-            $node['default'] = $default;
+            if ($default !== null) {
+                $node['default'] = $default;
+            }
         }
 
-        $config = $this->config($component, $node['type'], $resource, $name, $resourceKey);
+        $config = $this->config($component, $node['type'], $resource, $name, $resourceKey, $insideRepeater);
 
         if ($config !== []) {
             $node['config'] = $config;
         }
 
-        if (in_array($node['type'], ComponentTypeMap::LAYOUT_TYPES, true)) {
-            $node['children'] = $this->walk(
+        // `repeater` is deliberately NOT in LAYOUT_TYPES (see that constant's
+        // docblock): RuleExtractor::childrenOf() and FormDefaults::
+        // fromComponents() both recurse LAYOUT_TYPES as pass-through
+        // containers, hoisting children to top-level names — exactly wrong
+        // for a repeater, whose children are per-item and get `items.*.field`
+        // names (Task 2). The walker's own children emission is the one place
+        // that needs the item template alongside a layout container's, so it
+        // is checked here rather than by widening the shared constant.
+        if (in_array($node['type'], ComponentTypeMap::LAYOUT_TYPES, true) || $node['type'] === 'repeater') {
+            $node['children'] = $this->walkNodes(
                 $this->childrenOf($component, $resource),
                 $resource,
                 $resourceKey,
+                $insideRepeater || $node['type'] === 'repeater',
+                $model,
             );
         }
 
@@ -257,11 +307,97 @@ final class SchemaWalker
     }
 
     /**
+     * The one read node() and config() both key their `file` handling off,
+     * so "unwritable" and "readOnly" cannot silently disagree the way they
+     * did before this task — `node()` had its own independent `=== 'file'`
+     * check and `config()` a separate unconditional one. Through read(),
+     * like every other closure here: a throwing `isMultiple()` degrades this
+     * one field's config rather than the whole document, falling back to
+     * `true` — multiple, so published `readOnly: true` and unwritable. The
+     * CLOSED answer, deliberately: this is the closure writability keys off,
+     * and `false` here offered a control `UploadFieldResolver::resolve()`
+     * (whose own try/catch refuses the same throw) would 403 on every
+     * upload. `RuleExtractor` withholds the rule on the same throw (its
+     * `!== false` check reads the null the same way), so the walker, the
+     * extractor and the resolver all give the same closed answer.
+     */
+    private function isMultipleFile(object $component, string $type, string $resource, ?string $name): bool
+    {
+        return $type === 'file' && (bool) $this->read($component, 'isMultiple', $resource, $name, 'multiple', true);
+    }
+
+    /**
+     * `getAcceptedFileTypes()`/`getMaxSize()` for a single-file field,
+     * shaped like gate() rather than read(): the caller needs to tell "not
+     * configured" (a genuine `null` — publish unrestricted) apart from "the
+     * closure threw" (must lock the field, never publish a value at all —
+     * see config()'s call site for why read()'s fallback was wrong here).
+     *
+     * @return array{0: mixed, 1: bool} the value (null if absent or failed), and whether the read failed
+     */
+    private function readFileConstraint(object $component, string $method, string $resource, ?string $name, string $property): array
+    {
+        if (! method_exists($component, $method)) {
+            return [null, false];
+        }
+
+        try {
+            return [$component->{$method}(), false];
+        } catch (Throwable $e) {
+            $this->warnings->add(
+                $resource,
+                $name ?? $component::class,
+                "could not evaluate `{$property}`, locking the field: " . $e->getMessage(),
+            );
+
+            return [null, true];
+        }
+    }
+
+    /**
+     * Whether a repeater must be published read-only because its rows are a
+     * relationship's.
+     *
+     * A relationship repeater writes child rows through Filament's own
+     * saveRelationships(), which this package's write path never calls — out
+     * of scope this slice, so it is refused rather than offered as a control
+     * that cannot save.
+     *
+     * Shaped like readFileConstraint()/gate(), NOT like read(), for the same
+     * reason the `file` branch is: read() returns its fallback when the
+     * accessor throws, and this gate's fallback (null) is also its "no
+     * relationship, publish editable" answer. A throwing getRelationship()
+     * therefore failed OPEN — it published rows the write path silently
+     * drops. A gate that cannot answer must refuse the field, never admit
+     * it. A component with no getRelationship() at all lands in the same
+     * refusal: nothing declared these rows writable.
+     *
+     * The predicate itself lives on FieldPersistence, because RuleExtractor
+     * reads the same gate to withhold the field's rules — before that, the
+     * node said `readOnly: true` while `WritableNames` said writable. All
+     * that is left here is the warning.
+     */
+    private function refusesRelationship(object $component, string $resource, ?string $name): bool
+    {
+        $refuses = FieldPersistence::refusesRelationship($component, $error);
+
+        if ($error !== null) {
+            $this->warnings->add(
+                $resource,
+                $name ?? $component::class,
+                'could not evaluate `relationship`, locking the field: ' . $error->getMessage(),
+            );
+        }
+
+        return $refuses;
+    }
+
+    /**
      * Some contract types are a refinement of the class-level mapping: a
      * `select` becomes `multiselect` when multiple, and a `text` becomes
      * `email` or `password` by input type.
      */
-    private function refineType(object $component, string $type, string $resource): string
+    private function refineType(object $component, string $type, string $resource, ?string $model = null): string
     {
         $name = $this->nameOf($component, $resource);
 
@@ -288,17 +424,142 @@ final class SchemaWalker
             return 'badge_entry';
         }
 
+        if ($type === 'text_entry' && $this->isRich($component, $resource, $name, $model)) {
+            return 'rich_entry';
+        }
+
         return $type;
     }
 
-    /** @return array<string, mixed> */
-    private function config(object $component, string $type, string $resource, ?string $name, string $resourceKey): array
+    /**
+     * The two halves of Filament's own `isProse()` (RichEditor's
+     * HasRichContent docs), rewritten because the real one is unusable here.
+     *
+     * Half 1 — an explicit `->prose()` call — is read exactly like the
+     * neighbouring `isBadge` check, through read()'s guarded closure: a
+     * throwing gate degrades to `false` (refusal, not an upgrade) and warns,
+     * never propagates.
+     *
+     * Half 2 — `isProse()`'s own second half — calls `getRecord()`, and
+     * `MobilePanelController::infolistPaths()` deliberately builds this
+     * infolist with no record (see its docblock: passing one would delete
+     * BrokenSchemaTest's only coverage of the silent-fallback path). So this
+     * half is answered against the model CLASS instead, via
+     * `RichContent::attributesFor()` — the one piece of information
+     * `infolistPaths()` does have. `$model` is null for the many bare-list
+     * unit tests that never call walk() with one, and this half is then
+     * simply unreachable, same as before this method existed.
+     *
+     * Written once, both halves, one place — P6d shipped a defect because
+     * the same rule (`$card === null`) was written twice and drifted.
+     */
+    private function isRich(object $component, string $resource, ?string $name, ?string $model): bool
     {
-        // Upload is P6. Until then a `file` field always reads as read-only,
-        // so a client renders it disabled rather than pretending it can
-        // accept an upload the server has nowhere to put.
+        if ($this->read($component, 'isProse', $resource, $name, 'prose', false)) {
+            return true;
+        }
+
+        if ($model === null || $name === null) {
+            return false;
+        }
+
+        return in_array($name, RichContent::attributesFor($model), true);
+    }
+
+    /** @return array<string, mixed> */
+    private function config(object $component, string $type, string $resource, ?string $name, string $resourceKey, bool $insideRepeater = false): array
+    {
+        // Upload is P6a. Multiple stays read-only — nowhere to save more than
+        // one path per column this slice, mirroring RuleExtractor's own
+        // narrowing. A single-file field genuinely persists (the upload
+        // endpoint hands back a path, the ordinary write path saves it like
+        // any other string column), so it publishes editable plus the two
+        // constraints the server enforces regardless — these are hints for a
+        // client to pre-filter and pre-warn with, never the gate.
         if ($type === 'file') {
-            return ['readOnly' => true];
+            if ($this->isMultipleFile($component, $type, $resource, $name)) {
+                return ['readOnly' => true];
+            }
+
+            // read()'s fallback collapses "never configured" (a legitimate
+            // null — publish unrestricted) and "the closure threw" into the
+            // same value, and those are not the same field: `avatar` never
+            // called acceptedFileTypes()/maxSize() at all, but a THROWING
+            // one means UploadController's own constraintsFor() fails
+            // closed on every real attempt (empty type allow-list from the
+            // same throw). Publishing `readOnly: false` for that field
+            // would offer a control the server refuses unconditionally —
+            // exactly the "user fills it in, server rejects" failure this
+            // package exists to prevent. So this reads through gate()'s
+            // catch-and-lock shape instead of read()'s catch-and-degrade
+            // one: a gate that cannot answer must refuse the field, never
+            // admit it (the same rule `hidden`/`disabled` already apply).
+            [$accept, $acceptFailed] = $this->readFileConstraint($component, 'getAcceptedFileTypes', $resource, $name, 'accept');
+            [$maxSize, $maxSizeFailed] = $this->readFileConstraint($component, 'getMaxSize', $resource, $name, 'maxSize');
+
+            if ($acceptFailed || $maxSizeFailed) {
+                return ['readOnly' => true];
+            }
+
+            $config = ['readOnly' => false];
+
+            if ($accept !== null) {
+                $config['accept'] = $accept;
+            }
+
+            if ($maxSize !== null) {
+                $config['maxSize'] = $maxSize;
+            }
+
+            return $config;
+        }
+
+        if ($type === 'repeater') {
+            $config = [
+                'addable' => (bool) $this->read($component, 'isAddable', $resource, $name, 'addable', true),
+                'deletable' => (bool) $this->read($component, 'isDeletable', $resource, $name, 'deletable', true),
+                'minItems' => $this->read($component, 'getMinItems', $resource, $name, 'minItems'),
+                'maxItems' => $this->read($component, 'getMaxItems', $resource, $name, 'maxItems'),
+                // getItemLabel() takes a $key into an actual item's OWN state
+                // (Repeater::getItemLabel() calls getChildSchema($key), which
+                // needs a real row) — there is no row yet at schema-generation
+                // time, only the template, so this slice always publishes
+                // null. See the design spec's wire shape.
+                'itemLabel' => null,
+                // Published for a host that renders its own repeater; this
+                // package's client always treats reordering as false
+                // regardless of what is published here (design spec).
+                'reorderable' => (bool) $this->read($component, 'isReorderable', $resource, $name, 'reorderable', false),
+            ];
+
+            // ALWAYS published, both ways round: the client reads an absent
+            // `readOnly` as read-only on purpose (an absent key means a
+            // server predating repeater support, which must render inert
+            // rather than let a renderer guess it can accept edits), so
+            // publishing the key only for the refused case left every
+            // ordinary repeater permanently inert on a server that fully
+            // supports it. The server's word wins; a client never invents a
+            // capability the server did not declare — so the server has to
+            // declare it.
+            //
+            // Three ways to earn it, and the last two are P6c's close-out:
+            //
+            //  - a RELATIONSHIP repeater: its rows are saved by Filament's
+            //    own saveRelationships(), which this write path never calls.
+            //  - a NESTED one: two levels of row coordinate is a different
+            //    problem, and until now the client rendered a working
+            //    Add/Remove whose 422 it had no key to display. Every
+            //    document already promised this flag; nothing published it.
+            //  - one whose item template holds a child that would not
+            //    round-trip. RuleExtractor refuses the same field on the same
+            //    predicate (see withheldChild()), so this is the published
+            //    half of a refusal the write path already makes — never a
+            //    flag on its own.
+            $config['readOnly'] = $insideRepeater
+                || $this->refusesRelationship($component, $resource, $name)
+                || RuleExtractor::withheldChild(ChildComponents::of($component)) !== null;
+
+            return $config;
         }
 
         if (in_array($type, ['select', 'multiselect'], true)) {
@@ -407,26 +668,11 @@ final class SchemaWalker
 
             $flat[] = [
                 'value' => $value,
-                'label' => $html ? $this->plainText((string) $label) : (string) $label,
+                'label' => $html ? PlainText::of((string) $label) : (string) $label,
             ];
         }
 
         return $flat;
-    }
-
-    /**
-     * The text inside an `allowHtml()` label. Tags go, entities decode, and
-     * the whitespace an SVG's source newlines leave behind is collapsed — a
-     * phone renders a string, so what it needs is the string a sighted web
-     * user reads, not the markup that draws it.
-     */
-    private function plainText(string $label): string
-    {
-        return trim((string) preg_replace(
-            '/\s+/u',
-            ' ',
-            html_entity_decode(strip_tags($label), ENT_QUOTES | ENT_HTML5, 'UTF-8'),
-        ));
     }
 
     /** @return array<string, mixed> */

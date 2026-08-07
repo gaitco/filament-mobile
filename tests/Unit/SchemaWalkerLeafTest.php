@@ -121,12 +121,20 @@ it('still records a warning when a container-less component genuinely throws', f
         ->and($warnings->all()[0]['reason'])->toContain('boom');
 });
 
-it('emits a file field as read-only, so a client cannot offer an upload', function () {
+it('emits a single-file field as writable, since P6a', function () {
     $nodes = walk([Filament\Forms\Components\FileUpload::make('avatar')->label('الصورة')]);
 
     expect($nodes[0]['type'])->toBe('file')
         ->and($nodes[0]['name'])->toBe('avatar')
         ->and($nodes[0]['label'])->toBe('الصورة')
+        ->and($nodes[0]['config']['readOnly'])->toBeFalse();
+});
+
+it('emits a multiple-file field as read-only, so a client cannot offer an upload', function () {
+    $nodes = walk([Filament\Forms\Components\FileUpload::make('gallery')->multiple()]);
+
+    expect($nodes[0]['type'])->toBe('file')
+        ->and($nodes[0]['writable'])->toBeFalse()
         ->and($nodes[0]['config']['readOnly'])->toBeTrue();
 });
 

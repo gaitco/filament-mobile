@@ -113,9 +113,15 @@ it('never throws on a component whose accessors fail', function () {
 // --- Review round 2: recursion must match SchemaWalker exactly, or the two
 // disagree on which field names exist for the same schema (design point). ---
 
-it('agrees with SchemaWalker on which field names exist, even through an unsupported container', function () {
-    // Repeater has no ComponentTypeMap entry: the walker drops it (and
-    // everything inside it) with a warning rather than emitting a node.
+it('agrees with SchemaWalker on which NAMES a repeater contains, but not on their SHAPE — P6c\'s two name spaces', function () {
+    // Repeater is supported (P6c Task 1) and, since Task 2, RuleExtractor
+    // recurses into its item template like a container does — but prefixed
+    // (`items.*.name`), never hoisted to a bare top-level `name` that could
+    // collide with an unrelated field of the same key. The walker's `name`
+    // is un-prefixed because it names ONE node in a tree the client walks
+    // structurally; RuleExtractor's is prefixed because it names a flat
+    // Laravel validation rule. Same field, two different name spaces by
+    // design. See the design spec's "two different name spaces".
     $components = [
         Repeater::make('items')->required()->schema([
             TextInput::make('name')->required(),
@@ -127,22 +133,9 @@ it('agrees with SchemaWalker on which field names exist, even through an unsuppo
         (new SchemaWalker(new WalkWarnings()))->walk($components, 'test-resource'),
     );
 
-    expect(array_keys(RuleExtractor::fromComponents($components)))
-        ->toEqualCanonicalizing($walkerNames);
-});
-
-it('drops an unsupported container and its descendants rather than leaking them as top-level fields', function () {
-    $rules = RuleExtractor::fromComponents([
-        Repeater::make('items')->required()->schema([
-            TextInput::make('name')->required(),
-        ]),
-        TextInput::make('title')->required(),
-    ]);
-
-    // Neither the Repeater itself nor its inner `name` field is renderable
-    // by the client, so neither gets a rule — and `name` can't collide with
-    // an unrelated top-level field of the same key.
-    expect($rules)->toBe(['title' => ['required']]);
+    expect($walkerNames)->toEqualCanonicalizing(['items', 'name', 'title'])
+        ->and(array_keys(RuleExtractor::fromComponents($components)))
+        ->toEqualCanonicalizing(['items', 'items.*.name', 'title']);
 });
 
 it('extracts rules from a container whose children were assigned as a Schema instance', function () {
@@ -182,13 +175,18 @@ it('skips constraint accessors a component type does not define, such as Toggle'
     expect($rules)->toBe(['flag' => ['required']]);
 });
 
-it('withholds a rule from a file field, which is the one name the walker emits and this does not', function () {
+it('withholds a rule from a multiple-file field, which is the one name the walker emits and this does not', function () {
     // No rule means no key in the validated array, and the validated array is
-    // the mass-assignment whitelist — so a `file` value can never be written.
-    // Asserted alongside the walker so the exception stays a *known* one field
-    // wide rather than quietly growing.
+    // the mass-assignment whitelist — so a MULTIPLE file value can never be
+    // written (this slice, P6a, has nowhere to save more than one path per
+    // column). Asserted alongside the walker so the exception stays a *known*
+    // one field wide rather than quietly growing.
+    //
+    // A SINGLE-file field is no longer this exception: RuleExtractor narrowed
+    // the withholding to multiple-only, so it carries a rule like any other
+    // leaf. See RuleExtractorTest's sibling assertions and WritableNamesTest.
     $components = [
-        Filament\Forms\Components\FileUpload::make('avatar'),
+        Filament\Forms\Components\FileUpload::make('gallery')->multiple(),
         TextInput::make('name')->required(),
     ];
 
@@ -197,7 +195,7 @@ it('withholds a rule from a file field, which is the one name the walker emits a
     );
 
     expect(RuleExtractor::fromComponents($components))->toBe(['name' => ['required']])
-        ->and($walkerNames)->toEqualCanonicalizing(['avatar', 'name']);
+        ->and($walkerNames)->toEqualCanonicalizing(['gallery', 'name']);
 });
 
 it('keys its validation attributes exactly as it keys its rules', function () {
@@ -209,15 +207,21 @@ it('keys its validation attributes exactly as it keys its rules', function () {
     $components = [
         Section::make('Details')->schema([
             TextInput::make('vat_number')->label('VAT Certificate')->required(),
+            // A leaf name in its own right, AND (since P6c Task 2) a
+            // container whose item template contributes prefixed per-item
+            // names — `items.*.leaked` never surfaces as a bare top-level
+            // `leaked` that could collide with an unrelated field.
             Repeater::make('items')->schema([TextInput::make('leaked')]),
-            FileUpload::make('avatar')->required(),
+            // Multiple, deliberately: a single-file field now carries a rule
+            // like any other leaf and would defeat the point of this fixture.
+            FileUpload::make('gallery')->multiple()->required(),
         ]),
         TextInput::make('plain'),
     ];
 
     expect(array_keys(RuleExtractor::attributesFrom($components)))
         ->toBe(array_keys(RuleExtractor::fromComponents($components)))
-        ->toBe(['vat_number', 'plain']);
+        ->toBe(['vat_number', 'items', 'items.*.leaked', 'plain']);
 });
 
 it('reads the label into the attribute, not the column name', function () {

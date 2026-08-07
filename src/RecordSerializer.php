@@ -4,7 +4,9 @@ declare(strict_types=1);
 
 namespace Gait\FilamentMobile;
 
+use Gait\FilamentMobile\Introspection\RichContent;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Support\Arr;
 
 /**
  * Turns a record into exactly the payload the card declared, and nothing more.
@@ -21,6 +23,9 @@ final class RecordSerializer
 
     /** @var list<string> */
     private array $formPaths = [];
+
+    /** @var list<string> */
+    private array $richPaths = [];
 
     public function __construct(
         private readonly MobileCard $card,
@@ -73,6 +78,24 @@ final class RecordSerializer
         return $clone;
     }
 
+    /**
+     * Rich-text paths the SCHEMA declared — the infolist entries the walker
+     * refined to `rich_entry` because `->prose()` was set on them.
+     *
+     * Additive to what the record's own model declares (see richPathsFor()),
+     * never a replacement: an entry may be prose without the model knowing,
+     * and a model may declare an attribute no infolist mentions.
+     *
+     * @param  list<string>  $paths
+     */
+    public function withRichPaths(array $paths): self
+    {
+        $clone = clone $this;
+        $clone->richPaths = array_values($paths);
+
+        return $clone;
+    }
+
     /** @return array<string, mixed> */
     public function serialize(Model $record): array
     {
@@ -106,7 +129,64 @@ final class RecordSerializer
             $payload[$path] = $this->read($record, $path);
         }
 
+        // LAST, and flat, exactly like a translatable's `caption.ar`. Three
+        // consumers want three shapes of one rich column — the card wants
+        // plain text, the infolist wants the document, the form wants the raw
+        // string it edits — and an undotted name can only carry one. The
+        // obvious seam does not work, measured: withInfolistPaths(['body'])
+        // plus withFormPaths(['body']) yields ONE key, because the form pass
+        // writes flat and runs last. So `data.<path>` keeps the raw string
+        // byte-for-byte and the two derived shapes ride on a sibling key.
+        //
+        // Read out of the PAYLOAD, never off the record, and that is the whole
+        // whitelist guarantee: a derived shape is still the column's content,
+        // so a rich column no screen declared has nothing here to derive from
+        // and gets no sibling. `Arr::get()` prefers a literal key before it
+        // traverses, so it finds both what the flat form pass wrote and what
+        // the nested infolist pass did.
+        //
+        // Absence means unavailable: nothing to convert (null, empty, or a
+        // conversion that throws) means no sibling at all, never an empty one,
+        // and every consumer falls back to the raw string it already has.
+        foreach ($this->richPathsFor($record) as $path) {
+            $raw = Arr::get($payload, $path);
+            $envelope = is_string($raw) ? RichContent::envelopeFor($raw) : null;
+
+            if ($envelope === null) {
+                continue;
+            }
+
+            // Both shapes come out of ONE conversion, so the whitelist that
+            // builds the document also governs the text — see
+            // RichContent::envelopeFor(). Deriving the text here from `$raw`
+            // instead (`strip_tags`, which keeps a `<script>` body) is the
+            // defect that made this one call.
+            $payload["{$path}.__rich"] = $envelope;
+        }
+
         return $payload;
+    }
+
+    /**
+     * The union, in ONE place — P6d shipped a defect because the same rule
+     * lived in two.
+     *
+     * Half of it is the record's own model (`HasRichContent` plus the
+     * `InteractsWithRichContent` concern), which is why this is resolved here
+     * rather than passed in: every endpoint serialises through this class, so
+     * `index()`, `show()`, `store()` and `update()` cannot disagree about a
+     * card's text without any of them wiring anything up. The other half is
+     * whatever the schema declared with `->prose()`, which only the walker can
+     * know — see withRichPaths().
+     *
+     * @return list<string>
+     */
+    private function richPathsFor(Model $record): array
+    {
+        return array_values(array_unique([
+            ...RichContent::attributesFor($record::class),
+            ...$this->richPaths,
+        ]));
     }
 
     /**

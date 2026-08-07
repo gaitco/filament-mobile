@@ -2,9 +2,12 @@
 
 declare(strict_types=1);
 
+use Gait\FilamentMobile\Http\DashboardController;
 use Gait\FilamentMobile\Http\MobilePanelController;
 use Gait\FilamentMobile\Http\OptionsController;
+use Gait\FilamentMobile\Http\RelationController;
 use Gait\FilamentMobile\Http\StateController;
+use Gait\FilamentMobile\Http\UploadController;
 use Illuminate\Support\Facades\Route;
 
 $guard = config('filament-mobile.guard');
@@ -22,10 +25,16 @@ Route::prefix(config('filament-mobile.prefix'))
     ->group(function (): void {
         // Registered before the wildcard so the literal wins the match.
         Route::get('schema', [MobilePanelController::class, 'schema'])->name('schema');
+        // A literal, like `schema` — above the {resource} wildcards so it is
+        // never matched as a resource key.
+        Route::get('dashboard', DashboardController::class)->name('dashboard');
         // Above {resource}/{record} so `state` is never captured as a record id.
         Route::post('{resource}/state', StateController::class)->name('state');
         // Same reason, same placement: `options` is a literal, not a record id.
         Route::post('{resource}/options', OptionsController::class)->name('options');
+        // A literal segment, like `state` and `options` — above the record
+        // wildcard so `upload` is never captured as a record id.
+        Route::post('{resource}/upload', UploadController::class)->name('upload');
         // Above {resource}/{record} so a POST cannot be shadowed by it.
         Route::post('{resource}', [MobilePanelController::class, 'store'])->name('store');
         Route::get('{resource}', [MobilePanelController::class, 'index'])->name('index');
@@ -35,6 +44,11 @@ Route::prefix(config('filament-mobile.prefix'))
         // regardless of ordering.
         Route::post('{resource}/{record}/actions/{action}', [MobilePanelController::class, 'runAction'])
             ->name('run-action');
+        // A four-segment GET. Placed above `{resource}/{record}` for
+        // consistency with the routes around it, though — like `run-action` —
+        // it has no actual competitor at this segment count.
+        Route::get('{resource}/{record}/relations/{relation}', RelationController::class)
+            ->name('relations');
         Route::get('{resource}/{record}', [MobilePanelController::class, 'show'])->name('show');
         Route::put('{resource}/{record}', [MobilePanelController::class, 'update'])->name('update');
         Route::delete('{resource}/{record}', [MobilePanelController::class, 'destroy'])->name('destroy');

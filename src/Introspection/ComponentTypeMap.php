@@ -41,6 +41,16 @@ final class ComponentTypeMap
         // blocker: an unmapped type gets no rule, so a NOT NULL column still
         // fails to insert. Honest rather than good; P6 replaces it.
         'Filament\\Forms\\Components\\RichEditor' => 'textarea',
+        // A JSON-column repeater: its item template is published once as
+        // `children` (see SchemaWalker::childrenOf() via ChildComponents,
+        // which already reaches getChildSchema()), and its value round-trips
+        // as an ordinary array through the unmodified write path. Deliberately
+        // NOT in LAYOUT_TYPES — see that constant's docblock. A relationship
+        // repeater (`->relationship()`) writes child rows through Filament's
+        // own saveRelationships(), which this package's write path never
+        // calls, so it maps to the same type but the walker always publishes
+        // it `config.readOnly: true` — out of scope this slice.
+        'Filament\\Forms\\Components\\Repeater' => 'repeater',
 
         // Layout
         'Filament\\Schemas\\Components\\Section' => 'section',
@@ -146,7 +156,7 @@ final class ComponentTypeMap
      *
      * @var list<string>
      */
-    private const REFINED = ['multiselect', 'email', 'password', 'number', 'badge_entry'];
+    private const REFINED = ['multiselect', 'email', 'password', 'number', 'badge_entry', 'rich_entry'];
 
     public static function isSkipped(object $component): bool
     {

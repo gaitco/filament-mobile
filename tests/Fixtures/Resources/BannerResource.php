@@ -8,6 +8,7 @@ use Filament\Actions\Action;
 use Filament\Forms\Components\CheckboxList;
 use Filament\Forms\Components\FileUpload;
 use Filament\Forms\Components\Hidden;
+use Filament\Forms\Components\Repeater;
 use Filament\Forms\Components\RichEditor;
 use Filament\Forms\Components\Select;
 use Filament\Forms\Components\TextInput;
@@ -22,6 +23,7 @@ use Filament\Tables\Table;
 use Gait\FilamentMobile\MobileCard;
 use Gait\FilamentMobile\MobileResource;
 use Gait\FilamentMobile\Tests\Fixtures\Models\Banner;
+use Gait\FilamentMobile\Tests\Fixtures\Relations\TagsRelationManager;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\HtmlString;
 use RuntimeException;
@@ -56,6 +58,19 @@ class BannerResource extends Resource
                 // Resolves nowhere — the doctor case.
                 'ghost',
             ]);
+    }
+
+    /**
+     * P6d Task 5: the golden snapshot's one populated relation, so the
+     * client's relation parsing is exercised against real server output
+     * rather than only `[]`. BelongsToMany, deliberately — every relation
+     * fixture elsewhere in this suite is a HasMany.
+     */
+    public static function getRelations(): array
+    {
+        return [
+            TagsRelationManager::class,
+        ];
     }
 
     /**
@@ -413,6 +428,15 @@ class BannerResource extends Resource
                 // into state and then dehydrates, so this never reaches the
                 // row; the first version of FormDefaults wrote it.
                 Hidden::make('gated_note')->default('leak'),
+                // An upload nested inside a disabled container. Verified
+                // empirically: Filament's own isDisabled() DOES propagate the
+                // container's gate down to the child (it answers `true` here,
+                // wired into a real Schema), so the resolver's own
+                // isDisabled() check already refuses it directly — belt and
+                // suspenders with WritableNames' independent descent through
+                // RuleExtractor's LAYOUT_TYPES branch, the same one that
+                // protects `locked_note` above. Never written, so no column.
+                FileUpload::make('restricted_image'),
             ]),
             // The flat half of the same guard: `dehydrated(false)` needs no
             // state, so it is readable even detached. `Select::relationship()`
@@ -442,6 +466,119 @@ class BannerResource extends Resource
             // into the contract snapshot (so the Dart parser is proven to
             // accept it) and what gives FileFieldTest a real column to protect.
             FileUpload::make('avatar'),
+            // P6a: the slice's subject, a single-file upload the resolver
+            // must admit as writable.
+            FileUpload::make('hero_image')
+                ->image()
+                ->disk('public')
+                ->maxSize(1024)
+                ->acceptedFileTypes(['image/png', 'image/jpeg']),
+            // Multiple stays refused this slice — published readOnly and
+            // rejected by the endpoint, so nothing looks editable that is
+            // not.
+            FileUpload::make('gallery')->multiple(),
+            // A disabled upload must refuse exactly like a disabled field
+            // anywhere else in this package.
+            FileUpload::make('locked_file')->disabled(),
+            // A gate that cannot answer. UploadFieldResolver::resolve() must
+            // refuse this rather than let the exception propagate — the same
+            // fail-closed rule FieldPersistence applies everywhere else.
+            FileUpload::make('exploding_gate')
+                ->disabled(fn () => throw new RuntimeException('deliberately broken disabled gate')),
+            // A field the resolver DOES admit (not disabled, not multiple),
+            // but whose own type allow-list cannot answer. UploadController
+            // must fail closed here too — see UploadFieldResolver::
+            // constraintsFor()'s empty-from-a-throw handling.
+            FileUpload::make('exploding_types')
+                ->acceptedFileTypes(fn () => throw new RuntimeException('deliberately broken accepted-types gate')),
+            // The other half of the same guard: `getMaxSize()` is read
+            // through the same fail-closed path as `getAcceptedFileTypes()`
+            // (SchemaWalker::config()), so a throwing size gate must lock
+            // the field too, not just publish a missing `maxSize` hint on an
+            // otherwise-offered control.
+            FileUpload::make('exploding_max_size')
+                ->maxSize(fn () => throw new RuntimeException('deliberately broken max-size gate')),
+            // The one closure this feature keys WRITABILITY off, throwing.
+            // All three readers must give the same CLOSED answer:
+            // RuleExtractor withholds the rule (not in WritableNames, so
+            // PUT can neither write nor clear the column), SchemaWalker
+            // publishes readOnly: true, and UploadFieldResolver refuses the
+            // upload. Before this fixture, a throwing multiple() failed
+            // OPEN in the first two and closed only in the third — the wire
+            // offered a control whose every upload 403'd.
+            FileUpload::make('exploding_multiple')
+                ->multiple(fn () => throw new RuntimeException('deliberately broken multiple gate')),
+            // A storage getter that throws AFTER validation passed. The
+            // endpoint must degrade to the same 422 a throwing constraint
+            // closure gets, never a 500 — see UploadController's guarded
+            // storeAs() inputs.
+            FileUpload::make('exploding_disk')
+                ->disk(fn () => throw new RuntimeException('deliberately broken disk gate')),
+            // P6c: the slice's subject, a JSON-column repeater.
+            Repeater::make('line_items')
+                ->schema([
+                    TextInput::make('sku')->required()->maxLength(20),
+                    TextInput::make('qty')->numeric(),
+                ])
+                ->minItems(1)
+                ->maxItems(5),
+            // Add/delete gates off, so the client must not offer them.
+            Repeater::make('fixed_rows')
+                ->schema([TextInput::make('note')])
+                ->addable(false)
+                ->deletable(false),
+            // A relationship repeater writes child rows — out of scope this
+            // slice, so it must publish readOnly and be refused.
+            Repeater::make('tag_rows')
+                ->relationship('tags')
+                ->schema([TextInput::make('name')]),
+            // The one closure this field keys WRITABILITY off, throwing —
+            // the repeater's counterpart to `exploding_multiple` above.
+            // Read through read() it failed OPEN (a thrown getRelationship()
+            // came back as the null fallback, i.e. "not a relationship"), so
+            // the wire offered rows the write path can never save.
+            Repeater::make('exploding_relationship')
+                ->schema([TextInput::make('name')])
+                ->relationship(fn () => throw new RuntimeException('deliberately broken relationship gate')),
+            // A throwing config closure must degrade this one field, not the
+            // /schema document.
+            Repeater::make('exploding_repeater')
+                ->schema([TextInput::make('x')])
+                ->maxItems(fn () => throw new RuntimeException('boom')),
+            // Task 3: a genuinely disabled repeater — distinct from
+            // `fixed_rows` above, whose addable()/deletable() gates are off
+            // but which is not itself disabled. Its submitted rows must be
+            // silently dropped, not written, the same refusal every other
+            // disabled field gets.
+            Repeater::make('locked_rows')
+                ->schema([TextInput::make('note')])
+                ->disabled(),
+            // P6c close-out: a child that would NOT round-trip refuses the
+            // whole repeater. `Hidden::make('id')` inside a row is the
+            // ordinary shape — an identifier the panel stamps and the client
+            // never edits — and it is dropped by ComponentTypeMap::SKIPPED,
+            // so no rule names it and Laravel's `validated()` rebuild deleted
+            // it from every row on every save. Published read-only and given
+            // no rule at all instead; the stored rows stay readable.
+            Repeater::make('guarded_rows')
+                ->schema([
+                    TextInput::make('sku'),
+                    Hidden::make('id'),
+                ]),
+            // The same refusal earned a different way. A relation-write child
+            // gets no rule from RuleExtractor::fromComponents() — its value
+            // reaches the database through saveRelationships(), not the
+            // payload — and `->dehydrated(true)` overrides the literal
+            // `dehydrated(false)` that `relationship()` sets, so Filament DOES
+            // put `tags` in the row's stored state. No rule for a key that is
+            // stored means `validated()` deletes it from every row on save.
+            Repeater::make('relation_rows')
+                ->schema([
+                    TextInput::make('title'),
+                    CheckboxList::make('tags')
+                        ->relationship('tags', 'name')
+                        ->dehydrated(true),
+                ]),
             // The reactive pair /state exists for: `city_id` is visible only
             // when `country_id` is 3, which is answerable only against
             // submitted state.
@@ -476,6 +613,13 @@ class BannerResource extends Resource
             // infolistPaths() — the discriminator for a merge that silently
             // became a replacement.
             TextEntry::make('infolist_only_note'),
+            // P6e Task 4: the golden panel's `rich_entry` fixture. No
+            // `->prose()` call here — Banner::setUpRichContent() already
+            // registers `body_html` (Task 1), so this exercises the
+            // MODEL-DECLARED half of SchemaWalker::isRich() against real
+            // data, which is the same column the form above already edits
+            // with RichEditor.
+            TextEntry::make('body_html'),
         ]);
     }
 }

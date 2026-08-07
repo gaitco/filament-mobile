@@ -55,6 +55,11 @@ return new class extends Migration
             // Never referenced by the card or the infolist: it is the column
             // the serialisation whitelist has to keep out of the payload.
             $table->text('internal_note')->nullable();
+            // P6e: rich text the MODEL knows nothing about — RichResource's
+            // infolist declares it with ->prose() alone. `body_html` above
+            // covers the model-declared half; this one is the only fixture
+            // that can fail if the serializer's rich paths stop being a union.
+            $table->text('prose_note')->nullable();
             // Cast to array on the model. A closure reading it sees a JSON
             // *string* from getAttributes() and a real array from
             // attributesToArray() — the observable difference that pins which
@@ -95,6 +100,12 @@ return new class extends Migration
             // package serves may ever write it — the fixture exists so that a
             // write which *did* reach it would be observable.
             $table->string('avatar')->nullable();
+            // P6a: the single-file upload this slice makes genuinely
+            // writable, and the disabled one that must refuse like any other
+            // disabled field. `gallery` (multiple) needs no column — it is
+            // never written.
+            $table->string('hero_image')->nullable();
+            $table->string('locked_file')->nullable();
             // Two Hidden fields share this one, under `caption.ar` and
             // `caption.en`: a dotted field name is a PATH, and FormDefaults
             // wrote it as a literal key until the write pilot's review.
@@ -103,6 +114,27 @@ return new class extends Migration
             // submitted `['c']` over a default of `['a','b','c']` lands here as
             // `['c','b','c']` — PHP merges lists by index.
             $table->json('plain_multi')->nullable();
+            // P6c: the JSON-column repeaters. `tag_rows` needs no column — it
+            // is a relationship repeater, never written by this package's
+            // write path.
+            $table->json('line_items')->nullable();
+            $table->json('fixed_rows')->nullable();
+            $table->json('exploding_repeater')->nullable();
+            // Task 3: a genuinely `disabled()` repeater, distinct from
+            // `fixed_rows` above (whose addable()/deletable() are false but
+            // which is not itself disabled). Proves a disabled repeater's
+            // submitted rows are silently dropped, not written — the same
+            // refusal shape any other disabled field gets.
+            $table->json('locked_rows')->nullable();
+            // P6c close-out: a repeater whose item template holds a child
+            // that would not round-trip (a `Hidden`). Its stored rows must
+            // survive a crafted save untouched — the whole point of refusing
+            // the field rather than merging by index.
+            $table->json('guarded_rows')->nullable();
+            // P6c close-out re-review: the same refusal, earned by a
+            // relation-write child that `->dehydrated(true)` puts back into
+            // the row's stored state while no rule ever names it.
+            $table->json('relation_rows')->nullable();
             $table->timestamp('deleted_at')->nullable();
             $table->timestamps();
         });

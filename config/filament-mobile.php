@@ -30,6 +30,13 @@ return [
     // panel is booted — or to serve a deliberate subset.
     'resources' => null,
 
+    // Dashboard widgets exposed to mobile, by class name, in publication
+    // order. Empty by default and never auto-discovered: a widget runs
+    // arbitrary queries, so a panel must name each one it wants on a phone.
+    // Only StatsOverviewWidget and ChartWidget subclasses are supported;
+    // `filament-mobile:doctor` reports anything else.
+    'widgets' => [],
+
     // Components this package does not ship knowledge of, mapped to a contract
     // type. Entries here win over the built-in map, so a panel can also
     // override one it disagrees with. `filament-mobile:doctor` prints the exact

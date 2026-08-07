@@ -61,6 +61,18 @@ function softDeleteOneBanner(): void
 }
 
 /**
+ * The full `/schema` document, for assertions against top-level keys (e.g.
+ * `panel`) rather than a single resource — see schemaFor() for that.
+ */
+function schemaDocument(): array
+{
+    return test()->actingAs(makeUser('admin'))
+        ->getJson('/api/mobile-panel/schema')
+        ->assertOk()
+        ->json();
+}
+
+/**
  * Thin wrapper over the `/schema` request, returning one resource by key.
  */
 function schemaFor(string $key): array

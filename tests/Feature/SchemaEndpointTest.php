@@ -319,9 +319,96 @@ it('omits the email key on a field that is not an email', function () {
 });
 
 it('marks a field this package cannot persist as not writable', function () {
-    $node = findFormNode(schemaFor('banners'), 'avatar');   // a file field
+    // `gallery` is multiple, so it stays the one this package cannot
+    // persist — a single-file field like `avatar` is writable since P6a
+    // (RuleExtractor admits its rule; see the file-upload tests below).
+    $node = findFormNode(schemaFor('banners'), 'gallery');
 
     expect($node['writable'])->toBeFalse();
+});
+
+it('publishes a single-file upload as writable, with its accept and maxSize', function () {
+    // P6a: the write path genuinely persists a single-file field now
+    // (RuleExtractor admits its rule, Task 1), so /schema must stop
+    // publishing `writable: false` / `readOnly: true` for one — the two
+    // were left silently disagreed until this task. Absent `writable` means
+    // writable, same convention as any ordinary field.
+    $node = findFormNode(schemaFor('banners'), 'hero_image');
+
+    expect($node)->not->toHaveKey('writable')
+        ->and($node['config']['readOnly'])->toBeFalse()
+        ->and($node['config']['accept'])->toBe(['image/png', 'image/jpeg'])
+        ->and($node['config']['maxSize'])->toBe(1024);
+});
+
+it('keeps a multiple-file upload readOnly and unwritable', function () {
+    // Unchanged: multiple-file has nowhere to save more than one path per
+    // column this slice, and RuleExtractor still withholds its rule.
+    $node = findFormNode(schemaFor('banners'), 'gallery');
+
+    expect($node['writable'])->toBeFalse()
+        ->and($node['config']['readOnly'])->toBeTrue();
+});
+
+it('locks a single-file field whose accepted-types gate cannot answer, rather than offering a control the upload endpoint will always refuse', function () {
+    // UploadController's own constraintsFor() fails closed identically on
+    // this same throw (empty type allow-list from a throw), so a client
+    // offered this control could tap it, pick a photo, wait for the
+    // upload, and be 422'd — every time. config() must not collapse "never
+    // configured" and "threw" into the same `readOnly: false`.
+    $node = findFormNode(schemaFor('banners'), 'exploding_types');
+
+    expect($node['config']['readOnly'])->toBeTrue()
+        ->and($node['config'])->not->toHaveKey('accept')
+        ->and($node['config'])->not->toHaveKey('maxSize');
+});
+
+it('locks a single-file field whose max-size gate cannot answer, the same as a throwing accepted-types gate', function () {
+    $node = findFormNode(schemaFor('banners'), 'exploding_max_size');
+
+    expect($node['config']['readOnly'])->toBeTrue()
+        ->and($node['config'])->not->toHaveKey('accept')
+        ->and($node['config'])->not->toHaveKey('maxSize');
+});
+
+it('locks a single-file field whose multiple() gate cannot answer, and withholds it from the write path', function () {
+    // The fail-open this closes: a throwing multiple() used to publish
+    // `readOnly: false` (walker fallback) AND admit the field's rule
+    // (RuleExtractor read the throw as "not multiple") while the upload
+    // resolver refused it — a control whose every upload 403'd, plus a PUT
+    // that could write or clear the column. All three now agree on the
+    // closed answer.
+    $node = findFormNode(schemaFor('banners'), 'exploding_multiple');
+
+    expect($node['writable'])->toBeFalse()
+        ->and($node['config']['readOnly'])->toBeTrue();
+});
+
+it('still publishes an unrestricted single-file field as writable, distinct from one whose gate threw', function () {
+    // `avatar` never configured acceptedFileTypes()/maxSize() at all — a
+    // legitimate null, not a throw — so it must stay distinguishable on
+    // the wire from exploding_types/exploding_max_size above.
+    $node = findFormNode(schemaFor('banners'), 'avatar');
+
+    expect($node['config']['readOnly'])->toBeFalse();
+});
+
+it('persists a hero_image path through the ordinary, unmodified write path', function () {
+    // Proves the design's "no change to store()/update()" claim: a
+    // single-file field's rule now enters the validated payload like any
+    // other string column, and the path the upload endpoint hands back is
+    // what update() saves.
+    $banner = seedBanner();
+
+    $this->actingAs(makeUser('admin'))
+        ->putJson("/api/mobile-panel/banners/{$banner->id}", [
+            'name' => 'جديد',
+            'body_html' => '<p>Body</p>',
+            'hero_image' => 'uploads/hero.png',
+        ])
+        ->assertOk();
+
+    expect($banner->fresh()->hero_image)->toBe('uploads/hero.png');
 });
 
 it('omits writable on an ordinary field', function () {

@@ -29,10 +29,13 @@ final class WritableNames
      */
     public static function of(iterable $components): array
     {
-        // The rules array is already the mass-assignment whitelist — only a
-        // key with a rule survives $request->validate() and reaches create()
-        // or update(). Reusing it is what keeps "trusted to steer a gate" and
-        // "allowed to be written" from ever drifting apart.
+        // NOT array_keys(RuleExtractor::fromComponents(...)) — since P6c a
+        // repeater's rules also carry its per-item paths (`items.*.name`),
+        // and Arr::has()/Arr::set() (SettledSchema::reset()) have no
+        // wildcard support: a starred name here would silently drop every
+        // submitted row rather than trust it. writableComponents() is the
+        // same descent with the starred entries left out at the source — see
+        // its docblock and the design spec's "two different name spaces".
         //
         // Relation-write names are the second door into the database: their
         // ids reach it through saveRelationships(), not the payload, so they
@@ -42,7 +45,7 @@ final class WritableNames
         // an empty state where the user's choice was. Disabled ones are
         // already excluded, fail closed, inside the descent.
         return array_values(array_unique([
-            ...array_keys(RuleExtractor::fromComponents($components)),
+            ...array_keys(RuleExtractor::writableComponents($components)),
             ...array_keys(RuleExtractor::relationWriteComponents($components)),
         ]));
     }

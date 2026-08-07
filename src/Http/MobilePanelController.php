@@ -13,6 +13,7 @@ use Gait\FilamentMobile\Actions\ActionResolver;
 use Gait\FilamentMobile\Authorizer;
 use Gait\FilamentMobile\Introspection\FormDefaults;
 use Gait\FilamentMobile\Introspection\HeadlessSchemaHost;
+use Gait\FilamentMobile\Introspection\RichContent;
 use Gait\FilamentMobile\Introspection\SchemaWalker;
 use Gait\FilamentMobile\Introspection\WalkWarnings;
 use Gait\FilamentMobile\MobileResource;
@@ -28,6 +29,7 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Arr;
 use Illuminate\Support\Facades\Log;
+use RuntimeException;
 use Throwable;
 
 final class MobilePanelController
@@ -42,13 +44,87 @@ final class MobilePanelController
     {
         $document = $this->builder->build($request->user());
 
+        // Hashed BEFORE `_warnings` is attached, deliberately: warnings are
+        // dev-only and not part of the contract, so folding them in would
+        // move the ETag between environments and make every client
+        // revalidate to a full 200 for a document that never changed.
+        //
+        // A content hash rather than anything user-derived: `/schema` is
+        // filtered by policy, so two users legitimately see different
+        // documents — and hashing what was actually built gets that right
+        // without this endpoint knowing anything about identity.
+        //
+        // sha1, not xxh128: xxh128 is available on this PHP build, but its
+        // determinism (not its speed) is what this endpoint needs, and sha1
+        // is guaranteed present on every PHP without an extension check.
+        $encoded = json_encode($document);
+
+        // json_encode() returns false on failure (invalid UTF-8 in a
+        // translated label is the realistic trigger), and (string) false is
+        // ''. Hashing that silently would give every failing document the
+        // same ETag, so two genuinely different documents could collide and
+        // a client would keep a stale panel forever with no way to notice.
+        // Fail loudly instead — the same posture SafeEvaluator's callers take
+        // everywhere else a would-be silent corruption is worse than a 500.
+        if ($encoded === false) {
+            throw new RuntimeException('Could not encode the panel document to compute its ETag: ' . json_last_error_msg());
+        }
+
+        $etag = 'W/"' . sha1($encoded) . '"';
+
+        if ($this->ifNoneMatchHits($request, $etag)) {
+            // 304 carries no body by definition. Laravel's own
+            // Response::prepare() (called for every controller response via
+            // Router::runRoute()) sets the content to '' whenever the status
+            // is 204/304 — verified against this project's installed
+            // Illuminate\Http — so JsonResponse::json(null, 304) already
+            // sends a genuinely empty body; no plain Response is needed.
+            return response()->json(null, 304)->header('ETag', $etag);
+        }
+
         // Read at request time, not cached at boot: the production test
         // flips the environment after the app has already booted.
         if (! app()->environment('production')) {
             $document['_warnings'] = $this->builder->warnings()->all();
         }
 
-        return response()->json($document);
+        return response()->json($document)->header('ETag', $etag);
+    }
+
+    /**
+     * Whether the request's `If-None-Match` already names this document's
+     * ETag. Tolerant of a comma-separated list and of either the weak
+     * (`W/"…"`) or strong (`"…"`) form — a proxy may rewrite either — by
+     * comparing the bare quoted value on both sides.
+     */
+    private function ifNoneMatchHits(Request $request, string $etag): bool
+    {
+        $header = $request->headers->get('If-None-Match');
+
+        if ($header === null) {
+            return false;
+        }
+
+        $bare = $this->stripWeakPrefix($etag);
+
+        foreach (explode(',', $header) as $candidate) {
+            $candidate = trim($candidate);
+
+            // RFC 7232 §3.2: `*` matches any current representation — the
+            // "I have *a* cached copy, tell me if it's stale" form, distinct
+            // from naming a specific ETag.
+            if ($candidate === '*' || $this->stripWeakPrefix($candidate) === $bare) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /** Strips a leading `W/` — the weak-validator marker — if present. */
+    private function stripWeakPrefix(string $value): string
+    {
+        return str_starts_with($value, 'W/') ? substr($value, 2) : $value;
     }
 
     public function index(Request $request, string $resource): JsonResponse
@@ -222,9 +298,19 @@ final class MobilePanelController
         // sharing one JSON key: nesting the second replaces the first, and the
         // endpoint answered `{"caption": {"ar": null}}` for exactly that
         // reason. The infolist keeps its nesting; the form gets literal keys.
+        //
+        // Walked once and read twice: the leaf names are what gets serialised,
+        // and the `rich_entry` names are the schema's half of the rich-path
+        // union (the model's half is the serializer's own — see
+        // RecordSerializer::richPathsFor(), which is where the union lives).
+        // A `->prose()` entry over a column the model declares nothing about
+        // is covered only by this half.
+        $infolist = $this->infolistNodes($class, $resource, $attributes);
+
         $serializer = (new RecordSerializer($mobile->getCard(), $model->getRouteKeyName()))
-            ->withInfolistPaths($this->infolistPaths($class, $resource, $attributes))
-            ->withFormPaths($this->formPaths($class, $resource, $attributes, $record));
+            ->withInfolistPaths($this->leafNames($infolist))
+            ->withFormPaths($this->formPaths($class, $resource, $attributes, $record))
+            ->withRichPaths(RichContent::entryNamesIn($infolist));
 
         $resolver = new ActionResolver($class, $mobile);
 
@@ -540,13 +626,36 @@ final class MobilePanelController
      * per-field refusal report in the response, which is a contract change, not
      * a fix here.
      *
+     * P6c Task 3 finding, fixed here rather than worked around in a test: a
+     * plain `array_intersect_key` against `$settled->writable()` was an exact-
+     * key match, which held for every rule name before repeaters because
+     * `WritableNames::of()` USED to be `array_keys(RuleExtractor::
+     * fromComponents(...))` — the same set, by construction. P6c broke that
+     * identity on purpose (see the design spec's "two different name
+     * spaces"): a repeater's rules also carry per-item paths
+     * (`line_items.*.sku`), but `WritableNames` deliberately names only the
+     * whole-array `line_items` — `Arr::has()`/`Arr::set()` have no wildcard
+     * support, so a starred name may never enter the settle's allow-set.
+     * The exact-key intersection this method used to do therefore matched
+     * `line_items` but never `line_items.*.sku`, silently dropping every
+     * per-item rule from what `$request->validate()` was ever given — a row
+     * with an empty required `sku` validated as if the child rule did not
+     * exist. `isRuleNameAllowed()` is the fix: an exact match still wins for
+     * an ordinary field, and a `name.*.` prefix wins only when `name` ITSELF
+     * is writable — so a per-item rule is admitted exactly when its owning
+     * repeater is, and a disabled or relationship repeater's per-item rules
+     * stay excluded right alongside its own, same as before.
+     *
      * @return array<string, mixed>
      */
     private function allowedRules(SettledSchema $settled): array
     {
-        return array_intersect_key(
+        $writable = $settled->writable();
+
+        return array_filter(
             RuleExtractor::fromComponents($settled->components()),
-            array_flip($settled->writable()),
+            static fn (string $name): bool => self::isRuleNameAllowed($name, $writable),
+            ARRAY_FILTER_USE_KEY,
         );
     }
 
@@ -562,18 +671,46 @@ final class MobilePanelController
      * once the panel's locale was Arabic, where the 422 read
      * "title.ar مطلوب" against a published "الاسم (عربي) مطلوب".
      *
-     * Intersected with the same allow-set as the rules: an attribute for a
-     * name no rule mentions is inert, but leaving it in would make this method
-     * and allowedRules() disagree about which fields exist.
+     * Filtered by the same predicate as allowedRules(), for the same reason
+     * and since the same Task 3 finding: an attribute for a name no rule
+     * mentions is inert, but a narrower filter here would make this method
+     * and allowedRules() disagree about which fields exist — a repeater's
+     * per-item attribute (`line_items.*.sku`) must survive here exactly when
+     * its rule does, or its 422 falls back to the humanised path instead of
+     * the field's own label.
      *
      * @return array<string, string>
      */
     private function validationAttributes(SettledSchema $settled): array
     {
-        return array_intersect_key(
+        $writable = $settled->writable();
+
+        return array_filter(
             RuleExtractor::attributesFrom($settled->components()),
-            array_flip($settled->writable()),
+            static fn (string $name): bool => self::isRuleNameAllowed($name, $writable),
+            ARRAY_FILTER_USE_KEY,
         );
+    }
+
+    /**
+     * Whether a RuleExtractor key may reach `$request->validate()` — an exact
+     * writable name (every ordinary field, and a repeater's own whole-array
+     * name), or a per-item path prefixed by a writable repeater's name
+     * (`line_items.*.sku` when `line_items` is writable). See allowedRules()'s
+     * docblock for why the exact-match-only predicate this replaces was
+     * silently dropping every repeater child rule.
+     *
+     * @param  list<string>  $writable
+     */
+    private static function isRuleNameAllowed(string $name, array $writable): bool
+    {
+        foreach ($writable as $allowed) {
+            if ($name === $allowed || str_starts_with($name, $allowed . '.*.')) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**
@@ -835,10 +972,14 @@ final class MobilePanelController
     }
 
     /**
-     * Every attribute path the resource's infolist names, flattened out of the
-     * walked tree — the same walk /schema publishes, so the detail payload
-     * cannot drift from the detail screen the client was told to render.
-     * Layout nodes (the ones carrying children) name a section, not a column.
+     * The resource's infolist as the walker sees it — the same walk /schema
+     * publishes, so the detail payload cannot drift from the detail screen the
+     * client was told to render.
+     *
+     * The TREE, not the flattened names, because show() needs two answers from
+     * one walk: which paths to serialise (`leafNames()`, where layout nodes
+     * name a section rather than a column) and which of them are rich
+     * (`richNames()`). Walking twice would be the same rule in two places.
      *
      * Built through the same host the write path uses, seeded with this
      * record's cast values: an infolist entry may be conditional too, and a
@@ -847,9 +988,9 @@ final class MobilePanelController
      *
      * @param  class-string  $class
      * @param  array<string, mixed>  $state
-     * @return list<string>
+     * @return list<array<string, mixed>>
      */
-    private function infolistPaths(string $class, string $resourceKey, array $state): array
+    private function infolistNodes(string $class, string $resourceKey, array $state): array
     {
         $walker = new SchemaWalker(new WalkWarnings());
 
@@ -888,7 +1029,7 @@ final class MobilePanelController
             return [];
         }
 
-        return $this->leafNames($walker->walk($components, class_basename($class), $resourceKey));
+        return $walker->walk($components, class_basename($class), $resourceKey, $class::getModel());
     }
 
     /**
@@ -923,6 +1064,53 @@ final class MobilePanelController
     }
 
     /**
+     * A repeater node carries BOTH `children` (its item template, published
+     * once — see SchemaWalker) AND its own writable name: the whole array is
+     * one attribute on the model (design spec, "two different name spaces").
+     * Every other node with `children` — `section`, `grid`, `tabs`,
+     * `fieldset` — is a pass-through container with no column of its own, so
+     * recursing without collecting its name is still correct for those.
+     *
+     * Keyed on `type === 'repeater'` rather than "has children and a name",
+     * matching the idiom RuleExtractor and DoctorCommand already use to spot
+     * a repeater node: a `section`'s own `name` is null (SchemaWalkerTreeTest
+     * asserts this directly; `grid`/`tabs`/`fieldset` are argued the same way
+     * from source — HasLabel/HasHeading own the constructor argument, not a
+     * state path — but are not themselves pinned by a null-name assertion),
+     * so today the two conditions would likely pick out the same nodes — but
+     * keying on the type says what's actually being special-cased, and does
+     * not depend on that holding for every layout type.
+     *
+     * A repeater's children are per-item paths (`items.*.field`), never
+     * top-level names, so they must NOT be recursed into here — doing so
+     * would hand the serializer a path like `sku` that doesn't exist as a
+     * column on the parent model. That was the pre-fix behaviour: a
+     * repeater used to fall into the generic `isset($node['children'])`
+     * branch below and recurse, so its item template's field names leaked in
+     * as bogus top-level paths and RecordSerializer read `$record->sku` —
+     * nonexistent, silently null — into every payload. Returning before that
+     * recursion closes this leak as a side effect of the fix, not just the
+     * missing-key defect the tests below name.
+     *
+     * A RELATIONSHIP repeater is the one exception: it has no column of its
+     * own — `Repeater::relationship()` writes child rows through Filament's
+     * own saveRelationships(), never an attribute on this model — so
+     * collecting its name would have RecordSerializer read a non-existent
+     * attribute and publish it as an ordinary null column instead of leaving
+     * it absent the way every other read-only, no-column thing on this
+     * contract is absent.
+     *
+     * It is identified by `config.readOnly` AND `writable: false` together,
+     * and both halves are load-bearing. `relationship()` earns both (it sets
+     * `dehydrated(false)` as a literal, which is what `neverPersists()`
+     * publishes as `writable: false`). `readOnly` ALONE stopped meaning "no
+     * column" when P6c's close-out started publishing it for a nested
+     * repeater and for one whose item template holds a child that would not
+     * round-trip — both of which have a real column whose stored rows must
+     * still be READABLE, since refusing the control is precisely how their
+     * data is being protected. Keying on `readOnly` alone silently dropped
+     * those columns from every GET.
+     *
      * @param  list<array<string, mixed>>  $nodes
      * @return list<string>
      */
@@ -931,6 +1119,15 @@ final class MobilePanelController
         $names = [];
 
         foreach ($nodes as $node) {
+            if (($node['type'] ?? null) === 'repeater') {
+                if (is_string($node['name'] ?? null)
+                    && ! (($node['config']['readOnly'] ?? false) === true && ($node['writable'] ?? true) === false)) {
+                    $names[] = $node['name'];
+                }
+
+                continue;
+            }
+
             if (isset($node['children'])) {
                 $names = [...$names, ...$this->leafNames($node['children'])];
 
