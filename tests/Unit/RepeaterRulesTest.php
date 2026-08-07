@@ -3,9 +3,9 @@
 declare(strict_types=1);
 
 use Filament\Forms\Components\CheckboxList;
-use Filament\Forms\Components\ColorPicker;
 use Filament\Forms\Components\FileUpload;
 use Filament\Forms\Components\Hidden;
+use Filament\Forms\Components\MarkdownEditor;
 use Filament\Forms\Components\Repeater;
 use Filament\Forms\Components\TextInput;
 use Filament\Schemas\Components\Section;
@@ -195,7 +195,12 @@ it('refuses a whole repeater when a child of its item template would not round-t
         'disabled' => TextInput::make('rate')->disabled(),
         'hidden component' => Hidden::make('id'),
         'never dehydrated' => TextInput::make('note')->dehydrated(false),
-        'unmapped type' => ColorPicker::make('swatch'),
+        // P8 Task 3 mapped ColorPicker (formerly this fixture's stand-in) to
+        // `color`, so an actually-unmapped component is needed here now:
+        // MarkdownEditor extends Field directly, not RichEditor — matching
+        // is by exact class name (ComponentTypeMap's docblock), so it stays
+        // unmapped even though RichEditor is.
+        'unmapped type' => MarkdownEditor::make('notes'),
         'multiple file' => FileUpload::make('gallery')->multiple(),
     ];
 

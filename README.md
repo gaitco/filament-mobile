@@ -176,6 +176,8 @@ fields the infolist names.
 | [Radio](#radio) | Real radio buttons, sharing `Select`'s own options |
 | [Tags](#tags) | Free-form string tags, per-tag rules enforced, a configured separator mirrored into the stored column |
 | [Key/value](#keyvalue) | Free-form key-value pairs, gated by four client hints |
+| [Colour](#colour) | `ColorPicker` in the format the panel declared, never converted |
+| [Time and date bounds](#time-and-date-bounds) | `TimePicker` as its own type, and the `minDate`/`maxDate` a picker declares |
 | [Relations](#relations) | Relation managers as read-only child lists |
 | [Rich text](#rich-text) | `RichEditor` columns as a structured document, sanitised by construction |
 | [Dashboard](#dashboard) | The panel's opted-in widgets, computed live |
@@ -807,6 +809,88 @@ panel author ever reports relying on the gates as authorization.
 - **No key-uniqueness validation.** A duplicate key entered on the phone
   collapses in the submitted map, exactly as it does on the web.
 - **The four gates are advisory**, per the paragraph above.
+
+## Colour
+
+`ColorPicker::make('accent')` is a working, editable field on the phone.
+
+```php
+ColorPicker::make('accent')->rgba(),
+```
+
+The node publishes one thing — the **format** the panel declared:
+
+```jsonc
+{ "type": "color", "name": "accent", "config": { "format": "rgba" } }
+```
+
+`format` is a **closed set** — `hex` (Filament's default), `hsl`, `rgb`,
+`rgba`. Anything else normalises to `hex`, because a client cannot act on a
+fifth value, and a throwing `format()` closure degrades to `hex` rather than
+failing the document.
+
+**The value is never converted.** A field declared `rgb` gets `rgb` back, byte
+for byte wherever the user did not edit it. The client parses all four formats
+and emits the one it was given; it never offers to switch representation, and
+it never "helpfully" normalises `rgb(51, 102, 153)` into `#336699`.
+
+The phone renders a **text field with a live swatch**, not a colour wheel —
+this package takes no colour dependency, and a hand-rolled picker's colour
+maths is easy to get subtly wrong and hard to test. A malformed value blocks
+submission, but **only once the user has edited that field**: the client must
+not invent a constraint the server does not have, and it must not block a save
+over a value that was already in the database when the form opened.
+
+### Known weaknesses, stated now
+
+- **No graphical picking.** The field is typed, not picked.
+- **No format conversion**, deliberately — see above.
+- **The `hsl` pattern rejects a fractional hue** while accepting fractional
+  saturation and lightness. That is faithful to Filament's own documented
+  regex rather than a decision this package made.
+
+## Time and date bounds
+
+`TimePicker::make('opens_at')` is a working, editable field, and **`date` and
+`datetime` now publish the bounds they always declared**.
+
+```php
+TimePicker::make('opens_at')->minDate('09:00')->maxDate('17:00'),
+DateTimePicker::make('published_at')->minDate('2026-01-01')->maxDate('2026-12-31'),
+```
+
+```jsonc
+{ "type": "time", "name": "opens_at",
+  "config": { "minDate": "09:00", "maxDate": "17:00", "seconds": false } }
+```
+
+**`TimePicker` costs almost nothing on the server**, because it is a five-line
+class: `extends DateTimePicker`, overriding only `hasDate()`. It inherits every
+accessor the date branch already reads, so `time` widens that branch rather
+than copying it.
+
+**A bound has two wire shapes**, and both are published verbatim rather than
+normalised: `->minDate('09:00')` publishes `"09:00"`, while a Carbon publishes
+`"2026-01-01 09:00:00"`. Normalising a bare time into a full datetime would
+invent a date the panel never chose, so the client parses both instead.
+
+Until this release **no bound reached the client at all** — the walker never
+published `config` for a date node, while the Flutter client had parsed
+`minDate`/`maxDate` and passed them to its picker since the day it was written.
+The code was wired and dead.
+
+### Known weaknesses, stated now
+
+- **Bounds are hints, not rules.** The server refuses an out-of-range value
+  only if the panel declared a validation rule saying so; publishing a bound
+  does not create one.
+- **`hoursStep`, `minutesStep` and `secondsStep` are ignored**, so the phone
+  may offer a minute the web panel's stepper would not. Filament enforces those
+  in the UI rather than in validation, so mobile is no looser on the server
+  side — but it is a visible difference.
+- **`disabledDates`, `firstDayOfWeek` and `timezone` are not published.** The
+  first is the one most likely to matter, and it is why this package does not
+  claim its date pickers are complete.
 
 ## Relations
 

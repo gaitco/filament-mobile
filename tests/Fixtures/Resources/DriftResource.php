@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace Gait\FilamentMobile\Tests\Fixtures\Resources;
 
-use Filament\Forms\Components\ColorPicker;
+use Filament\Forms\Components\MarkdownEditor;
 use Filament\Forms\Components\TextInput;
 use Filament\Resources\Resource;
 use Filament\Schemas\Schema;
@@ -42,7 +42,10 @@ class DriftResource extends Resource
         return $schema->components([
             TextInput::make('name'),
             // Unmapped by ComponentTypeMap: an unsupported component.
-            ColorPicker::make('color'),
+            // ColorPicker itself was this stand-in before P8 Task 3 mapped
+            // it to `color` — MarkdownEditor extends Field directly, not
+            // RichEditor, so exact-class-name matching leaves it unmapped.
+            MarkdownEditor::make('notes'),
         ]);
     }
 

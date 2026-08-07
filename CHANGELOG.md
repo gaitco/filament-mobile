@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.5.0 — 2026-08-08
+
+- **`ColorPicker` and `TimePicker`.** Two more previously-unmapped field types
+  are editable on the phone. `color` publishes the format the panel declared —
+  a closed set of `hex`, `hsl`, `rgb`, `rgba`, with anything else and a
+  throwing closure both normalising to `hex`. `time` is its own type, and
+  because `TimePicker` is a five-line subclass of `DateTimePicker` it **widens**
+  the date branch rather than copying it.
+- **Date bounds reach the client at last.** `date`, `datetime` and `time` now
+  publish `config: {minDate, maxDate, seconds}` from `getMinDate()`,
+  `getMaxDate()` and `hasSeconds()`. This closes a gap rather than adding a
+  feature: the Flutter client has parsed those bounds and passed them to its
+  picker since the day it was written, and the server had never sent them, so
+  the code was wired and dead in every host.
+  A bound is published **verbatim** — `->minDate('09:00')` publishes `"09:00"`,
+  a Carbon publishes `"2026-01-01 09:00:00"` — because normalising a bare time
+  into a full datetime would invent a date the panel never chose.
+- **Bounds are hints, not rules.** Publishing one does not create a validation
+  rule; the server still refuses an out-of-range value only if the panel
+  declared a rule saying so.
+- Fixture note for maintainers: `MarkdownEditor` is now the fixtures'
+  stand-in for "a deliberately unmapped component", inherited from
+  `ColorPicker` when that became mapped. **Mapping `MarkdownEditor` will break
+  `RepeaterRulesTest` and `DoctorCommandTest` until they are given a new
+  stand-in** — the fixtures' meaning depends on the component being
+  unsupported, which is invisible from the fixtures themselves.
+
 ## 0.4.0 — 2026-08-07
 
 - **Radio, tags and key/value.** Three previously-unmapped Filament field

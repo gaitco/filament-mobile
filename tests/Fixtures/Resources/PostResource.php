@@ -4,12 +4,15 @@ declare(strict_types=1);
 
 namespace Gait\FilamentMobile\Tests\Fixtures\Resources;
 
+use Carbon\Carbon;
 use Filament\Forms\Components\Checkbox;
 use Filament\Forms\Components\CheckboxList;
+use Filament\Forms\Components\ColorPicker;
 use Filament\Forms\Components\DatePicker;
 use Filament\Forms\Components\DateTimePicker;
 use Filament\Forms\Components\TextInput;
 use Filament\Forms\Components\Textarea;
+use Filament\Forms\Components\TimePicker;
 use Filament\Forms\Components\Toggle;
 use Filament\Infolists\Components\IconEntry;
 use Filament\Infolists\Components\ImageEntry;
@@ -74,9 +77,49 @@ class PostResource extends Resource
             Toggle::make('published'),
             Checkbox::make('featured'),
             Grid::make(2)->schema([
+                // Deliberately unbounded — the pair with `published_at` below
+                // proves both cases in the golden snapshot itself: a date
+                // node with real minDate/maxDate, and one with neither. See
+                // DateConfigTest.php for the exhaustive (bounded/unbounded/
+                // exploding) unit coverage; this fixture exists only so the
+                // Dart-side contract test parses a REAL server-emitted bound,
+                // not one hand-written into a Dart test fixture (fix round 1,
+                // P8 Task 1 — the P6d `relations: []` shape).
                 DatePicker::make('published_on'),
-                DateTimePicker::make('published_at'),
+                DateTimePicker::make('published_at')
+                    ->minDate('2026-01-01')
+                    ->maxDate('2026-12-31'),
+                // P8 Task 2, same bounded/unbounded pairing and for the same
+                // reason: a `time` fixture with no bounds proves nothing about
+                // time bounds, and `"09:00"` is precisely the string
+                // DateTime.tryParse returns null for — so this pair is what
+                // makes the Dart side's time-bound parse provable against real
+                // server output rather than hand-written JSON. `opens_at` also
+                // turns seconds OFF against `closes_at`'s vendor default of
+                // ON, so neither can stand in for a hard-coded value.
+                TimePicker::make('opens_at')
+                    ->minDate('09:00')
+                    ->maxDate('17:00')
+                    ->seconds(false),
+                TimePicker::make('closes_at'),
+                // The second wire shape, in the golden rather than only as a
+                // string typed into a Dart test: `getMinDate()` is a bare
+                // `evaluate()`, so a Carbon-declared bound publishes
+                // "2026-01-01 09:00:00" where a string-declared one publishes
+                // "09:00". Both halves of the client's bound parse now cross
+                // the package boundary through a real server document — the
+                // same gap Task 1 closed for date bounds.
+                TimePicker::make('reminder_at')
+                    ->minDate(Carbon::parse('2026-01-01 09:00')),
             ]),
+            // P8 Task 3. A non-default format, not hex, is what makes the
+            // Dart contract test parse a genuine `rgba` node out of real
+            // server output rather than only ever seeing the fallback — see
+            // ColorTest.php for the exhaustive (hex/hsl/rgb/rgba/nonsense/
+            // exploding) unit coverage of every format this field can
+            // declare, which a single golden fixture cannot exercise on its
+            // own.
+            ColorPicker::make('accent_color')->rgba(),
             // The four refined types — `refineType()` derives them from a
             // mapped component's accessors rather than from its class, so
             // nothing else in the fixtures reaches them, and CheckboxList is

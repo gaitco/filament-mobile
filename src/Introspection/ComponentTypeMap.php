@@ -50,6 +50,25 @@ final class ComponentTypeMap
         'Filament\\Forms\\Components\\Checkbox' => 'checkbox',
         'Filament\\Forms\\Components\\DatePicker' => 'date',
         'Filament\\Forms\\Components\\DateTimePicker' => 'datetime',
+        // Its own type, not `datetime`: matching here is by exact class name,
+        // so a TimePicker would otherwise fall through unmapped and be
+        // dropped with a warning — and a dropped field gets no validation
+        // rule, so a NOT NULL time column fails at the database instead. The
+        // class is five lines in vendor (`extends DateTimePicker`, overriding
+        // only `hasDate(): false`), so it inherits getMinDate()/getMaxDate()/
+        // hasSeconds() unchanged — which is why SchemaWalker::config()'s date
+        // branch is widened to `time` rather than copied.
+        'Filament\\Forms\\Components\\TimePicker' => 'time',
+        // Its only accessor is getFormat() (measured in vendor/filament/
+        // forms/src/Components/ColorPicker.php) — 'hex' by default, or
+        // 'hsl'/'rgb'/'rgba' via the matching ->hsl()/->rgb()/->rgba()
+        // helper. The wire *value* is a plain string in that declared
+        // format and travels unmodified through the ordinary default/state
+        // paths every other field uses; only the format name is config()'s
+        // concern (SchemaWalker's `color` branch), and it is a closed set —
+        // anything else normalises to 'hex', the same rule direction()
+        // applies to a bogus `filament-panels::layout.direction`.
+        'Filament\\Forms\\Components\\ColorPicker' => 'color',
         // Upload is deferred to a later phase (P6) — the client cannot yet
         // send a file — so both the plain and Spatie-backed upload fields map
         // to `file`, which the walker always emits as `config.readOnly: true`.

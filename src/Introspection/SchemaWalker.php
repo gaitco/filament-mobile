@@ -631,6 +631,57 @@ final class SchemaWalker
             ];
         }
 
+        if ($type === 'color') {
+            // getFormat() is the ONLY accessor ColorPicker exposes (measured
+            // in vendor/filament/forms/src/Components/ColorPicker.php) —
+            // 'hex' by default, 'hsl'/'rgb'/'rgba' via the matching helper.
+            // Through read(), like every other closure: a throwing format()
+            // closure degrades to its own fallback of 'hex' rather than
+            // failing the document.
+            //
+            // The closed-set check runs regardless of whether read() had to
+            // fall back, because 'hex' fallback and a host-declared 'sideways'
+            // both need the same answer — a client cannot act on a fifth
+            // value, and 'hex' is Filament's own default. Task 3's brief
+            // states the rule; P7's `direction()` applies the identical one
+            // to `filament-panels::layout.direction`.
+            $format = $this->read($component, 'getFormat', $resource, $name, 'format', 'hex');
+
+            return [
+                'format' => in_array($format, ['hex', 'hsl', 'rgb', 'rgba'], true) ? $format : 'hex',
+            ];
+        }
+
+        if (in_array($type, ['date', 'datetime', 'time'], true)) {
+            // getMinDate()/getMaxDate() return ?string, and hasSeconds()
+            // returns bool — all three measured directly on DateTimePicker in
+            // vendor/filament/forms/src/Components/DateTimePicker.php, so
+            // nothing here needs serialising. `date`/`datetime` never had a
+            // branch at all before P8 Task 1.
+            //
+            // `time` widens this branch rather than copying it (Task 2):
+            // TimePicker is five lines in vendor — `extends DateTimePicker`,
+            // overriding only `hasDate()` — so all three accessors are
+            // inherited unchanged. One reader, three types.
+            //
+            // The bounds go out exactly as the panel declared them, because
+            // getMinDate() is `evaluate($this->minDate)` and nothing more: a
+            // TimePicker with `->minDate('09:00')` publishes `"09:00"`, one
+            // given a Carbon publishes `"2026-01-01 09:00:00"`. Normalising a
+            // bare time into a full datetime would invent a date the panel
+            // never chose; the client parses both shapes instead.
+            //
+            // Every value through read(): a throwing minDate()/maxDate()/
+            // seconds() closure degrades that one bound to its fallback
+            // (null / false), never the whole document — the same rule every
+            // other branch here already follows.
+            return [
+                'minDate' => $this->read($component, 'getMinDate', $resource, $name, 'minDate'),
+                'maxDate' => $this->read($component, 'getMaxDate', $resource, $name, 'maxDate'),
+                'seconds' => (bool) $this->read($component, 'hasSeconds', $resource, $name, 'seconds', false),
+            ];
+        }
+
         if (in_array($type, ['select', 'multiselect', 'radio'], true)) {
             // Through read(), like every other closure: a throwing
             // isSearchable() costs this one field's inlining decision, not the
