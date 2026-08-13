@@ -49,6 +49,13 @@ final class RuleExtractor
      * whose disabled gate throws) are already dropped by the descent's
      * fail-closed refusal.
      *
+     * Two shapes arrive here: a multi-valued relationship field (a
+     * `Select::multiple()->relationship()`, a `CheckboxList::relationship()`)
+     * and, since P9, a relationship REPEATER — minted by the descent's
+     * repeater branch as a whole-array leaf with no per-item rules, saved by
+     * Filament's own `Repeater::saveToRelationship()` when the pass calls
+     * `saveRelationships()`.
+     *
      * `&& $entry['writable']` matters since P6c Task 2: a relation-write
      * field nested INSIDE a repeater's item template (e.g. a
      * `CheckboxList::relationship()` in `Repeater::make('items')->schema([
@@ -255,23 +262,56 @@ final class RuleExtractor
         // template that needs its own rules so the server enforces what a
         // row must contain. Its own gate must still run BEFORE the
         // recursion, exactly like a layout container's above: `disabled()`
-        // (and a relationship repeater's literal `dehydrated(false)`, see
-        // FieldPersistence::savesViaRelationship()'s singular-container
-        // branch) refuses the whole field, rows included, so a disabled or
-        // relationship repeater contributes nothing at all — no rule, no
-        // per-item rule, no writable name.
+        // refuses the whole field, rows included, so a disabled repeater
+        // contributes nothing at all — no rule, no per-item rule, no
+        // writable name.
         if ($type === 'repeater') {
-            // Three refusals, and all three are the WHOLE field: a repeater's
-            // value is one array attribute, so anything that would stop part
-            // of it round-tripping has to stop all of it.
+            // isNotSaved() first, for both kinds below: for a JSON-column
+            // repeater it is the ordinary disabled/undehydrated refusal, and
+            // for a relationship repeater it is the disabled half alone (its
+            // dehydration is false BY DESIGN — see isNotSaved()).
+            if (self::isNotSaved($component)) {
+                return [];
+            }
+
+            // A RELATIONSHIP repeater (P9) is a relation-write leaf, not a
+            // column: its rows are child records the controller's relation
+            // pass writes through Filament's own Repeater::saveToRelationship(),
+            // the same machinery a multi-valued relationship select already
+            // uses. It mints ONLY its whole-array name — no rule (fromComponents()
+            // drops relation-write leaves, so the value never enters the
+            // validated payload, where update() would write it as a column
+            // that does not exist) and no per-item rules (they would pull
+            // `tag_rows` into validated() through the back door, same 500).
+            // The row-level enforcement a JSON repeater gets from per-item
+            // rules is therefore absent here — Filament's own save is what
+            // runs, exactly as on the web panel.
             //
-            //  - `isNotSaved()`: disabled, or a relationship repeater's
-            //    literal `dehydrated(false)` — as for any other field.
-            //  - `refusesRelationship()`: the same gate SchemaWalker publishes
-            //    as `config.readOnly`. Read here too so the flag and the write
-            //    path cannot disagree — `->relationship()->dehydrated(true)`
-            //    made them disagree, and a crafted payload then reached
-            //    `update()` as a column that does not exist.
+            // A relationship gate that cannot ANSWER (a throwing
+            // relationship() closure) still refuses the whole field, fail
+            // closed: savesViaRelationship() catches the throw and answers
+            // true, so without this check the relation pass would call
+            // saveRelationships() on a component whose relationship throws —
+            // a 500 on crafted input, the exact shape the pre-P9 refusal
+            // existed to prevent.
+            if (FieldPersistence::savesViaRelationship($component)) {
+                if (FieldPersistence::refusesRelationship($component, $error) && $error !== null) {
+                    return [];
+                }
+
+                $name = self::read($component, 'getName');
+
+                if (! is_string($name) || $name === '') {
+                    return [];
+                }
+
+                return [$name => ['component' => $component, 'writable' => true]];
+            }
+
+            // A JSON-column repeater. The one remaining refusal is still the
+            // WHOLE field: its value is one array attribute, so anything that
+            // would stop part of it round-tripping has to stop all of it.
+            //
             //  - `withheldChild()`: a child whose own rule would be withheld.
             //    At top level withholding a rule PROTECTS the column (no key,
             //    so `update()` never touches it). Inside a repeater the whole
@@ -283,9 +323,15 @@ final class RuleExtractor
             //    index-merge pairs row 2's id with row 3's data the moment a
             //    row is added or removed), so the field fails closed rather
             //    than corrupting an identifier.
-            if (self::isNotSaved($component)
-                || FieldPersistence::refusesRelationship($component)
-                || self::withheldChild(ChildComponents::of($component)) !== null) {
+            //
+            // refusesRelationship() is no longer checked here: it answered
+            // true for every relationship repeater, which the branch above now
+            // admits, and for a JSON-column repeater — the only kind that
+            // reaches this point — its remaining true cases (no
+            // getRelationship() method, or a throwing gate) are unreachable,
+            // since a Repeater always has the method and a throwing gate made
+            // savesViaRelationship() answer true above.
+            if (self::withheldChild(ChildComponents::of($component)) !== null) {
                 return [];
             }
 
@@ -701,6 +747,34 @@ final class RuleExtractor
 
         if (self::read($component, 'isNumeric') === true) {
             $rules[] = 'numeric';
+        }
+
+        // The three rules the write path never re-derived: a `->url()`,
+        // `->regex(...)` or `->confirmed()` field 422'd on the web panel and
+        // sailed through here — mobile looser than web, the one thing this
+        // package's validation must never be. The published `rules` block
+        // (SchemaWalker) carries the same three as client hints, so hint and
+        // enforcement cannot drift.
+        if (self::read($component, 'isUrl') === true) {
+            $rules[] = 'url';
+        }
+
+        $pattern = self::read($component, 'getRegexPattern');
+
+        if (is_string($pattern) && $pattern !== '') {
+            $rules[] = "regex:{$pattern}";
+        }
+
+        // No accessor exists for `confirmed` — `->confirmed()` registers an
+        // ordinary `rule('confirmed', $condition)`, so scanning the resolved
+        // rule list is the only read. A closure that throws degrades to no
+        // rule, the standing degrade-on-throw shape; the failure mode is a
+        // missing constraint, not a crash, and it is documented in the
+        // walker's own `confirmed` branch.
+        $declared = self::read($component, 'getValidationRules');
+
+        if (is_array($declared) && in_array('confirmed', $declared, true)) {
+            $rules[] = 'confirmed';
         }
 
         $max = self::read($component, 'getMaxLength');

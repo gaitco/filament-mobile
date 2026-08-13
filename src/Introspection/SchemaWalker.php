@@ -20,6 +20,20 @@ final class SchemaWalker
 {
     private readonly SafeEvaluator $evaluator;
 
+    /**
+     * Sibling names a `confirmed` rule will read, for the walk in progress —
+     * `access_token_confirmation` for an `access_token` that declared
+     * `->confirmed()`, Laravel's own convention.
+     *
+     * Per-walk rather than constructor state for the same reason `$model`
+     * travels through the call: PanelSchemaBuilder reuses one walker across
+     * every resource in the panel, so this is reset at each `walk()` entry
+     * and never outlives it.
+     *
+     * @var list<string>
+     */
+    private array $confirmationNames = [];
+
     public function __construct(private readonly WalkWarnings $warnings)
     {
         $this->evaluator = new SafeEvaluator($warnings);
@@ -53,7 +67,52 @@ final class SchemaWalker
      */
     public function walk(iterable $components, string $resource, ?string $resourceKey = null, ?string $model = null): array
     {
+        // Materialised before the pre-pass because `$components` may be a
+        // generator, and a generator read twice yields nothing the second
+        // time — the walk itself would see an empty form.
+        $components = is_array($components) ? $components : iterator_to_array($components);
+
+        $this->confirmationNames = $this->confirmationNamesIn($components, $resource);
+
         return $this->walkNodes($components, $resource, $resourceKey ?? $resource, false, $model);
+    }
+
+    /**
+     * Every `{field}_confirmation` name some field in this tree will have its
+     * `confirmed` rule read against.
+     *
+     * A pre-pass rather than a per-node question because it is a fact about a
+     * field's SIBLING, and a node knows nothing of its siblings. Cheap: one
+     * descent, and `declaresConfirmed()` is the silent probe the rules pass
+     * already runs on the same components.
+     *
+     * @param  iterable<mixed>  $components
+     * @return list<string>
+     */
+    private function confirmationNamesIn(iterable $components, string $resource): array
+    {
+        $names = [];
+
+        foreach ($components as $component) {
+            if (! is_object($component)) {
+                continue;
+            }
+
+            if ($this->declaresConfirmed($component)) {
+                $name = $this->nameOf($component, $resource);
+
+                if (is_string($name) && $name !== '') {
+                    $names[] = $name . '_confirmation';
+                }
+            }
+
+            $names = [
+                ...$names,
+                ...$this->confirmationNamesIn(ChildComponents::of($component), $resource),
+            ];
+        }
+
+        return $names;
     }
 
     /**
@@ -170,6 +229,20 @@ final class SchemaWalker
     {
         $name = $this->nameOf($component, $resource);
 
+        // A `->dehydrated(false)` field that a sibling's `confirmed` rule reads
+        // is the one shape this predicate must not lock. Filament's own
+        // confirmation idiom never persists the second field — that is the
+        // point of it — but the user still has to TYPE it, and publishing it
+        // disabled and unwritable made every `->confirmed()` field
+        // unsubmittable from the client: the confirmation rendered inert, the
+        // payload omitted it, and the server's rule then compared against a
+        // key that could never arrive. Verified against the write path, which
+        // already handles the sibling correctly once it is sent (matching
+        // 200, mismatched 422) precisely because it carries no rule of its
+        // own and so never reaches mass assignment.
+        $neverPersists = FieldPersistence::neverPersists($component)
+            && ! ($name !== null && in_array($name, $this->confirmationNames, true));
+
         $node = [
             'type' => $this->refineType($component, $type, $resource, $model),
             'name' => $name,
@@ -190,17 +263,21 @@ final class SchemaWalker
             // 201, and the value was dropped. See FieldPersistence for which
             // refusals are publishable and which are only "not filled in yet".
             'disabled' => $this->gate($component, 'isDisabled', $resource, $name, 'disabled')
-                || FieldPersistence::neverPersists($component),
+                || $neverPersists,
             'live' => (bool) $this->read($component, 'isLive', $resource, $name, 'live', false),
             'rules' => $this->rules($component, $resource, $name),
         ];
 
-        // `disabled` says what the panel decided; `writable` says what this
-        // package can persist. They are different questions — a panel-disabled
-        // field is perfectly persistable, and a single-file field is not
-        // disabled at all — and conflating them is what made the multi-valued
-        // relationship flag a lie rather than a limitation. Absent means
-        // writable.
+        // `disabled` says what the panel decided; `writable` says whether the
+        // client should SEND this field. Those were the same question until a
+        // `confirmed` sibling arrived — a field that must be filled and must
+        // never be persisted — so the flag now means "include it in the
+        // payload", and the rules array remains the only whitelist deciding
+        // what a payload key can actually write. They are still different from
+        // `disabled` (a panel-disabled field is perfectly persistable, and a
+        // single-file field is not disabled at all), and conflating those is
+        // what made the multi-valued relationship flag a lie rather than a
+        // limitation. Absent means writable.
         //
         // `file` is checked by type, not by FieldPersistence::neverPersists():
         // an ordinary FileUpload dehydrates and has no relationship, so the
@@ -213,7 +290,7 @@ final class SchemaWalker
         // config(), which publishes the same distinction as readOnly, and
         // isMultipleFile() below — the one read both places share, so the
         // two cannot drift the way they did before this task.
-        if ($this->isMultipleFile($component, $node['type'], $resource, $name) || FieldPersistence::neverPersists($component)) {
+        if ($this->isMultipleFile($component, $node['type'], $resource, $name) || $neverPersists) {
             $node['writable'] = false;
         }
 
@@ -371,31 +448,35 @@ final class SchemaWalker
     }
 
     /**
-     * Whether a repeater must be published read-only because its rows are a
-     * relationship's.
+     * Whether a repeater's relationship gate cannot ANSWER — the one
+     * relationship condition that still earns `readOnly` since P9.
      *
-     * A relationship repeater writes child rows through Filament's own
-     * saveRelationships(), which this package's write path never calls — out
-     * of scope this slice, so it is refused rather than offered as a control
-     * that cannot save.
+     * A resolvable relationship repeater is writable: its rows are child
+     * records the write path saves through Filament's own
+     * `Repeater::saveToRelationship()`, reached by the controller's relation
+     * pass (the P3b machinery a multi-valued relationship select already
+     * used). Publishing it read-only — the pre-P9 behaviour — offered a
+     * control that could not save; publishing it editable now is what makes
+     * the flag honest.
      *
-     * Shaped like readFileConstraint()/gate(), NOT like read(), for the same
-     * reason the `file` branch is: read() returns its fallback when the
-     * accessor throws, and this gate's fallback (null) is also its "no
-     * relationship, publish editable" answer. A throwing getRelationship()
-     * therefore failed OPEN — it published rows the write path silently
-     * drops. A gate that cannot answer must refuse the field, never admit
-     * it. A component with no getRelationship() at all lands in the same
-     * refusal: nothing declared these rows writable.
+     * What must still fail closed is the gate that throws. Shaped like
+     * readFileConstraint()/gate(), NOT like read(), for the same reason the
+     * `file` branch is: read() returns its fallback when the accessor throws,
+     * and this gate's fallback (null) is also its "no relationship, publish
+     * editable" answer. A throwing getRelationship() therefore failed OPEN —
+     * it published rows the write path silently drops. A gate that cannot
+     * answer must refuse the field, never admit it.
      *
      * The predicate itself lives on FieldPersistence, because RuleExtractor
      * reads the same gate to withhold the field's rules — before that, the
      * node said `readOnly: true` while `WritableNames` said writable. All
-     * that is left here is the warning.
+     * that is left here is the warning and the error check: a relationship
+     * that resolves is not a refusal any more, so the verdict is whether
+     * `$error` came back set.
      */
-    private function refusesRelationship(object $component, string $resource, ?string $name): bool
+    private function unanswerableRelationshipGate(object $component, string $resource, ?string $name): bool
     {
-        $refuses = FieldPersistence::refusesRelationship($component, $error);
+        FieldPersistence::refusesRelationship($component, $error);
 
         if ($error !== null) {
             $this->warnings->add(
@@ -403,9 +484,11 @@ final class SchemaWalker
                 $name ?? $component::class,
                 'could not evaluate `relationship`, locking the field: ' . $error->getMessage(),
             );
+
+            return true;
         }
 
-        return $refuses;
+        return false;
     }
 
     /**
@@ -558,22 +641,29 @@ final class SchemaWalker
             // capability the server did not declare — so the server has to
             // declare it.
             //
-            // Three ways to earn it, and the last two are P6c's close-out:
+            // Three ways to earn it, and the last is P6c's close-out:
             //
-            //  - a RELATIONSHIP repeater: its rows are saved by Filament's
-            //    own saveRelationships(), which this write path never calls.
             //  - a NESTED one: two levels of row coordinate is a different
             //    problem, and until now the client rendered a working
             //    Add/Remove whose 422 it had no key to display. Every
             //    document already promised this flag; nothing published it.
-            //  - one whose item template holds a child that would not
-            //    round-trip. RuleExtractor refuses the same field on the same
-            //    predicate (see withheldChild()), so this is the published
-            //    half of a refusal the write path already makes — never a
-            //    flag on its own.
+            //  - a relationship gate that cannot ANSWER (a throwing
+            //    relationship() closure) — fail closed, as everywhere else.
+            //    A relationship repeater whose gate resolves is NOT here:
+            //    since P9 its rows write through the relation pass, so it is
+            //    published editable like any other writable repeater.
+            //  - a JSON-column repeater whose item template holds a child
+            //    that would not round-trip. RuleExtractor refuses the same
+            //    field on the same predicate (see withheldChild()), so this
+            //    is the published half of a refusal the write path already
+            //    makes — never a flag on its own. The check is skipped for a
+            //    relationship repeater: its rows never travel through
+            //    `validated()`, so the key-deletion hazard withheldChild()
+            //    guards against does not apply to it.
             $config['readOnly'] = $insideRepeater
-                || $this->refusesRelationship($component, $resource, $name)
-                || RuleExtractor::withheldChild(ChildComponents::of($component)) !== null;
+                || $this->unanswerableRelationshipGate($component, $resource, $name)
+                || (! FieldPersistence::savesViaRelationship($component)
+                    && RuleExtractor::withheldChild(ChildComponents::of($component)) !== null);
 
             return $config;
         }
@@ -846,6 +936,39 @@ final class SchemaWalker
             $rules['email'] = true;
         }
 
+        if ($this->read($component, 'isUrl', $resource, $name, 'url', false)) {
+            $rules['url'] = true;
+        }
+
+        $pattern = $this->read($component, 'getRegexPattern', $resource, $name, 'regex');
+
+        if (is_string($pattern) && $pattern !== '') {
+            // Undelimited, NOT verbatim — the correction to this rule's first
+            // cut, which published the PCRE pattern as Filament stores it and
+            // so blocked every submission of a `->regex()` field. Dart's
+            // RegExp takes a bare pattern, compiles `/^[a-z]+$/` without
+            // complaint, and then matches nothing at all: the leading `/` is
+            // a literal the input has to start with, and the `^` behind it
+            // asserts a start-of-string that has already been consumed. So
+            // the client's own hint refused values the server accepts, and
+            // the fail-open path never fired because the pattern is valid.
+            //
+            // The server side keeps the delimiters — Laravel's `regex:` rule
+            // requires them (RuleExtractor) — so this is a wire-shape fix,
+            // not a validation change. `contract/panel.json` already carried
+            // the undelimited form, which is how the two halves were found
+            // to disagree.
+            $undelimited = self::undelimitedPattern($pattern);
+
+            if ($undelimited !== null) {
+                $rules['regex'] = $undelimited;
+            }
+        }
+
+        if ($this->declaresConfirmed($component)) {
+            $rules['confirmed'] = true;
+        }
+
         // The panel's own locale, through the same translator the 422 uses, so
         // a hint and the server's eventual answer cannot say different things
         // about the same rule. A client with no published message falls back
@@ -863,25 +986,46 @@ final class SchemaWalker
             // whole document.
             $attribute = $this->read($component, 'getValidationAttribute', $resource, $name, 'validationAttribute', $name ?? '');
 
-            foreach (array_keys($rules) as $rule) {
-                // `validation.max` and `validation.min` are not flat strings —
-                // Laravel keys them by attribute type (`numeric`, `string`,
-                // `array`, `file`), the same way its own validator resolves the
-                // 422 message (FormatsMessages::getAttributeType()). Without the
-                // suffix, trans() hands back the whole array and every field
-                // with a max/min bound publishes an array where the contract
-                // promises a string. `max`/`min` here only ever bound a string
-                // length or a numeric value, so `numeric` is the one other case
-                // to distinguish.
-                $key = in_array($rule, ['max', 'min'], true)
-                    ? "validation.{$rule}." . (($rules['numeric'] ?? false) ? 'numeric' : 'string')
-                    : "validation.{$rule}";
+            try {
+                foreach (array_keys($rules) as $rule) {
+                    // `validation.max` and `validation.min` are not flat strings —
+                    // Laravel keys them by attribute type (`numeric`, `string`,
+                    // `array`, `file`), the same way its own validator resolves the
+                    // 422 message (FormatsMessages::getAttributeType()). Without the
+                    // suffix, trans() hands back the whole array and every field
+                    // with a max/min bound publishes an array where the contract
+                    // promises a string. `max`/`min` here only ever bound a string
+                    // length or a numeric value, so `numeric` is the one other case
+                    // to distinguish.
+                    $key = in_array($rule, ['max', 'min'], true)
+                        ? "validation.{$rule}." . (($rules['numeric'] ?? false) ? 'numeric' : 'string')
+                        : "validation.{$rule}";
 
-                $messages[$rule] = trans($key, [
-                    'attribute' => $attribute,
-                    'min' => $rules['min'] ?? '',
-                    'max' => $rules['max'] ?? '',
-                ]);
+                    $message = trans($key, [
+                        'attribute' => $attribute,
+                        'min' => $rules['min'] ?? '',
+                        'max' => $rules['max'] ?? '',
+                    ]);
+
+                    // A key that resolves to a nested group (validation.between)
+                    // comes back as an array where the contract promises a
+                    // string — skip it rather than publish the wrong shape.
+                    if (is_string($message)) {
+                        $messages[$rule] = $message;
+                    }
+                }
+            } catch (Throwable $e) {
+                // Guarded like PanelSchemaBuilder::direction()'s own __(): a
+                // throwing translator costs THIS FIELD'S messages — the client
+                // falls back to its own FilamentStrings per rule — never the
+                // component, and never the document. This catch is why a bare
+                // test-double translator no longer takes down /schema.
+                $this->warnings->add(
+                    $resource,
+                    $name ?? $component::class,
+                    'rule message translation threw: ' . $e->getMessage(),
+                );
+                $messages = [];
             }
         }
 
@@ -890,6 +1034,76 @@ final class SchemaWalker
         }
 
         return $rules;
+    }
+
+    /**
+     * A PCRE pattern with its delimiters stripped, ready for a client whose
+     * regex engine takes a bare pattern — or null when this package cannot
+     * publish it honestly, which withholds the hint and leaves the server's
+     * own `regex:` rule as the only judge.
+     *
+     * Null on FLAGS, deliberately, rather than stripping them too: Dart has
+     * no inline modifiers, so `/foo/i` published as `foo` would be STRICTER
+     * on the client than on the server — the same class of bug as the
+     * delimiters, only harder to see. Withholding fails open; over-tightening
+     * refuses input the panel accepts.
+     *
+     * Also null on anything that does not parse as delimited at all. PCRE
+     * allows any non-alphanumeric, non-backslash, non-whitespace delimiter
+     * and pairs the four bracket forms, so `#…#`, `~…~` and `{…}` are as
+     * valid as `/…/` and all of them reach here from a real panel.
+     */
+    private static function undelimitedPattern(string $pattern): ?string
+    {
+        $open = $pattern[0];
+
+        if (preg_match('/[a-zA-Z0-9\\\\\s]/', $open) === 1) {
+            return null;
+        }
+
+        $close = ['(' => ')', '[' => ']', '{' => '}', '<' => '>'][$open] ?? $open;
+
+        // The LAST occurrence: a same-character delimiter appears escaped
+        // inside the pattern (`/a\/b/`), and only the final one closes it.
+        $end = strrpos($pattern, $close);
+
+        // `$end === 0` is a one-character string — an opening delimiter with
+        // nothing behind it. Anything after the close is a flag.
+        if ($end === false || $end === 0 || $end !== strlen($pattern) - 1) {
+            return null;
+        }
+
+        $inner = substr($pattern, 1, $end - 1);
+
+        return $inner === '' ? null : $inner;
+    }
+
+    /**
+     * Whether the field declared `->confirmed()` — the only one of the three
+     * A6 rules with no accessor of its own. `->confirmed()` registers an
+     * ordinary `rule('confirmed', $condition)` (CanBeValidated), so the only
+     * honest read is scanning the field's own resolved rule list.
+     *
+     * Deliberately NOT through read(): a component whose rule list cannot
+     * resolve headlessly (a Select whose in-rule needs relationship context,
+     * a condition closure needing record state) throws as an ORDINARY event
+     * here, and read() would record a warning about a probe, not a defect.
+     * The scan fails silently instead — no hint, same degradation as an
+     * absent accessor.
+     */
+    private function declaresConfirmed(object $component): bool
+    {
+        if (! method_exists($component, 'getValidationRules')) {
+            return false;
+        }
+
+        try {
+            $declared = $component->getValidationRules();
+        } catch (Throwable) {
+            return false;
+        }
+
+        return is_array($declared) && in_array('confirmed', $declared, true);
     }
 
     private function nameOf(object $component, string $resource): ?string

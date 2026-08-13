@@ -61,10 +61,31 @@ final class ResourceRegistry
      * two resources would pick a form at random and could publish a column in
      * the wrong shape, which is worse than not answering.
      *
+     * P9 gave the null answer a second job: it is also what switches a
+     * relation's WRITE endpoints off (404) and keeps the `resource` key out
+     * of the relation's /schema node — absence means unavailable, and an
+     * ambiguous form is no form at all.
+     *
      * @param  class-string  $model
      * @return class-string|null
      */
     public function findByModel(string $model): ?string
+    {
+        $owners = $this->ownersOf($model);
+
+        return count($owners) === 1 ? $owners[0] : null;
+    }
+
+    /**
+     * EVERY mobile resource serving a model, so a caller can tell "none" from
+     * "several" — findByModel() collapses both into the same null, and
+     * `doctor` names a relation whose writes are off with the reason, which
+     * needs the count.
+     *
+     * @param  class-string  $model
+     * @return list<class-string>
+     */
+    public function ownersOf(string $model): array
     {
         $owners = [];
 
@@ -74,7 +95,7 @@ final class ResourceRegistry
             }
         }
 
-        return count($owners) === 1 ? $owners[0] : null;
+        return $owners;
     }
 
     /**

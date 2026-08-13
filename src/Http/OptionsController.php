@@ -174,6 +174,11 @@ final class OptionsController
      * extractor use, so a select nested in a Section is found exactly where
      * they would find it.
      *
+     * The descent also goes THROUGH a repeater into its item template: the
+     * client renders a row's select off the template and asks for it by its
+     * bare child name, so a lookup that stopped at the repeater's border
+     * would 422 a node the schema itself published with an `optionsUrl`.
+     *
      * @param  iterable<mixed>  $components
      */
     private function findSelect(iterable $components, string $field): ?object
@@ -185,7 +190,8 @@ final class OptionsController
 
             $type = ComponentTypeMap::for($component);
 
-            if ($type !== null && in_array($type, ComponentTypeMap::LAYOUT_TYPES, true)) {
+            if ($type !== null
+                && (in_array($type, ComponentTypeMap::LAYOUT_TYPES, true) || $type === 'repeater')) {
                 $found = $this->findSelect(ChildComponents::of($component), $field);
 
                 if ($found !== null) {

@@ -149,11 +149,26 @@ final class FieldPersistence
      * `Section::make(...)->relationship('company')` wired into a real Schema,
      * which is the case review found: `getRelationship()` came back a
      * non-null `BelongsTo` and the fallback locked a container the write path
-     * saves the ordinary way. `CheckboxList` is the one component that
-     * genuinely lacks `isMultiple()` and IS multi-valued regardless, so it is
-     * named explicitly rather than inferred from an absent method — by class
-     * name, not `instanceof`, matching ComponentTypeMap's own convention so
-     * this file still never imports a concrete Filament component class.
+     * saves the ordinary way.
+     *
+     * Two components genuinely lack `isMultiple()` while being multi-valued,
+     * so they are named explicitly rather than inferred from an absent method
+     * — by class name, not `instanceof`, matching ComponentTypeMap's own
+     * convention so this file still never imports a concrete Filament
+     * component class:
+     *
+     *  - `CheckboxList`, multi-valued by nature;
+     *  - `Repeater` (P9), multi-valued when — and only when — it declares
+     *    `->relationship()`: its rows are child records written by Filament's
+     *    own `Repeater::saveToRelationship()` through the relation pass,
+     *    never an attribute on the parent. A plain JSON-column repeater has
+     *    no relationship, so the `getRelationship() !== null` check below
+     *    still answers false for it and it stays an ordinary column write.
+     *    Before this branch a relationship repeater read as a SINGULAR
+     *    relationship container (no `isMultiple()`), so `neverPersists()`
+     *    locked it on its literal `dehydrated(false)` — and an explicit
+     *    `->dehydrated(true)` overrode even that, admitting the name as a
+     *    column write that only `refusesRelationship()` kept from 500ing.
      *
      * A relationship-type test (`BelongsToMany`/`MorphToMany` vs.
      * `BelongsTo`/`HasOne`/`MorphOne`) was the other candidate and was
@@ -169,7 +184,12 @@ final class FieldPersistence
             return false;
         }
 
-        if ($component::class === 'Filament\\Forms\\Components\\CheckboxList') {
+        if ($component::class === 'Filament\\Forms\\Components\\CheckboxList'
+            || $component::class === 'Filament\\Forms\\Components\\Repeater') {
+            // Multi-valued without an isMultiple() — a CheckboxList by
+            // nature, a Repeater when it declares ->relationship(). A plain
+            // JSON-column repeater fails the getRelationship() check below
+            // and stays a column write. See the docblock above.
             $multiple = true;
         } elseif (method_exists($component, 'isMultiple')) {
             $multiple = $component->isMultiple();
@@ -203,15 +223,23 @@ final class FieldPersistence
      * ("nothing declared these rows writable"), which is the right answer for
      * a repeater and the wrong one for a TextInput.
      *
-     * One implementation, two callers, and that is the point. `SchemaWalker`
-     * publishes the answer as `config.readOnly` and `RuleExtractor` withholds
-     * the field's rules and its writable name on it, so the published flag and
-     * the write path cannot disagree. They DID disagree before this existed:
+     * Since P9 a TRUE answer is no longer a refusal on its own: a resolvable
+     * relationship repeater is writable, saved by the controller's relation
+     * pass (see savesViaRelationship()'s Repeater branch). What still refuses
+     * is the gate that cannot ANSWER — a throwing `relationship()` closure,
+     * reported through `$error` — and both remaining callers key on that:
+     * SchemaWalker publishes `config.readOnly` only when `$error` is set, and
+     * RuleExtractor withholds the field's rules and writable name on the same
+     * condition, so the published flag and the write path cannot disagree.
+     * They DID disagree before this predicate existed:
      * `Repeater::relationship()->dehydrated(true)` overrode the literal-false
-     * dehydration `savesViaRelationship()` misclassifies as singular, so the
+     * dehydration `savesViaRelationship()` misclassified as singular, so the
      * node said `readOnly: true` while `WritableNames` admitted the name, and
      * a crafted payload reached `update()` as a column that does not exist —
-     * a QueryException, i.e. a 500 on crafted input.
+     * a QueryException, i.e. a 500 on crafted input. (`withheldChild()` also
+     * calls this, for a repeater nested in an item template: a nested
+     * RELATIONSHIP repeater still refuses there — two levels of row
+     * coordinate through the relation pass is a different problem.)
      *
      * `$error` is an out-parameter rather than a second method so the walker
      * can warn — with the real message — about a gate that errored, without

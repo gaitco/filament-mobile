@@ -9,6 +9,43 @@ use Gait\FilamentMobile\Tests\Fixtures\Models\User;
 
 uses(Gait\FilamentMobile\Tests\TestCase::class)->in('Unit', 'Feature');
 
+/**
+ * The same nested value with every object's keys sorted, for comparing
+ * anything that has been through a JSON column.
+ *
+ * MySQL's native `json` type stores objects with their keys sorted and hands
+ * them back that way, so a repeater row written `['sku' => …, 'qty' => …]`
+ * reads back `['qty' => …, 'sku' => …]`. Identical content — and key order is
+ * not part of this wire contract: a JSON object is unordered, and the client
+ * builds each repeater row from the schema's item TEMPLATE and reads every
+ * value by name (see `RepeaterFieldWidget`). But `toBe()` is order-sensitive,
+ * so nine assertions passed on SQLite and failed on MySQL the moment that job
+ * could finally run.
+ *
+ * Sorting both sides keeps the strict comparison — a wrong type or a missing
+ * key still fails — and drops only the ordering nothing ever promised.
+ * Deliberately NOT `toEqual()`, which would fix the ordering by switching to
+ * loose `==` and would then also stop telling `1` from `'1'`, exactly the
+ * distinction a JSON-column test most needs.
+ *
+ * Lists keep their order: that IS contractual — a repeater's rows are
+ * ordered, and only the maps inside them are not.
+ */
+function keySorted(mixed $value): mixed
+{
+    if (! is_array($value)) {
+        return $value;
+    }
+
+    $value = array_map(keySorted(...), $value);
+
+    if (! array_is_list($value)) {
+        ksort($value);
+    }
+
+    return $value;
+}
+
 function makeUser(string $name): User
 {
     return User::create([

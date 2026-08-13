@@ -11,8 +11,10 @@ use Filament\Support\Exceptions\Cancel;
 use Filament\Support\Exceptions\Halt;
 use Gait\FilamentMobile\Actions\ActionResolver;
 use Gait\FilamentMobile\Authorizer;
+use Gait\FilamentMobile\Introspection\ChildComponents;
+use Gait\FilamentMobile\Introspection\ComponentTypeMap;
+use Gait\FilamentMobile\Introspection\FieldPersistence;
 use Gait\FilamentMobile\Introspection\FormDefaults;
-use Gait\FilamentMobile\Introspection\HeadlessSchemaHost;
 use Gait\FilamentMobile\Introspection\RichContent;
 use Gait\FilamentMobile\Introspection\SchemaWalker;
 use Gait\FilamentMobile\Introspection\TagSeparators;
@@ -21,14 +23,13 @@ use Gait\FilamentMobile\MobileResource;
 use Gait\FilamentMobile\PanelSchemaBuilder;
 use Gait\FilamentMobile\RecordSerializer;
 use Gait\FilamentMobile\ResourceRegistry;
-use Gait\FilamentMobile\Validation\RuleExtractor;
+use Gait\FilamentMobile\Write\RecordForm;
 use Gait\FilamentMobile\Write\SettledSchema;
 use Gait\FilamentMobile\Write\WritableNames;
 use Illuminate\Contracts\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
-use Illuminate\Support\Arr;
 use Illuminate\Support\Facades\Log;
 use RuntimeException;
 use Throwable;
@@ -216,10 +217,10 @@ final class MobilePanelController
             // An empty state is also exactly what Filament's own CreateRecord
             // fills defaults into, so this is the closer match either way.
             trusted: FormDefaults::fromComponents(
-                $this->formComponents($class, [], record: null),
+                RecordForm::components($class, [], record: null),
             ),
             build: function (array $state) use ($class): array {
-                $components = $this->formComponents($class, $state, record: null);
+                $components = RecordForm::components($class, $state, record: null);
 
                 return ['components' => $components, 'writable' => WritableNames::of($components)];
             },
@@ -228,8 +229,8 @@ final class MobilePanelController
         $components = $settled->components();
 
         $validated = $request->validate(
-            $this->allowedRules($settled),
-            attributes: $this->validationAttributes($settled),
+            RecordForm::rules($settled),
+            attributes: RecordForm::validationAttributes($settled),
         );
 
         $model = $class::getModel();
@@ -246,11 +247,11 @@ final class MobilePanelController
         // same reason. A separator changes the column's shape, so a mirror
         // applied to one seam is a bug in the other.
         $record = $model::create(TagSeparators::dehydrate(
-            $this->fillMissingPaths($validated, FormDefaults::fromComponents($components)),
+            RecordForm::fillMissingPaths($validated, FormDefaults::fromComponents($components)),
             $components,
         ));
 
-        $this->saveRelations($class, $settled->state(), $record, 'create', $request->all());
+        RecordForm::saveRelations($class, $settled->state(), $record, 'create', $request->all());
 
         $serializer = new RecordSerializer($mobile->getCard(), $record->getRouteKeyName(), $class);
 
@@ -313,9 +314,12 @@ final class MobilePanelController
         // is covered only by this half.
         $infolist = $this->infolistNodes($class, $resource, $attributes);
 
+        $form = $this->formProjection($class, $resource, $attributes, $record);
+
         $serializer = (new RecordSerializer($mobile->getCard(), $model->getRouteKeyName(), $class))
             ->withInfolistPaths($this->leafNames($infolist))
-            ->withFormPaths($this->formPaths($class, $resource, $attributes, $record))
+            ->withFormPaths($form['paths'])
+            ->withRepeaterRows($form['repeaterRows'])
             ->withRichPaths(RichContent::entryNamesIn($infolist));
 
         $resolver = new ActionResolver($class, $mobile);
@@ -527,17 +531,17 @@ final class MobilePanelController
             // and that this is an edit. Without it every such gate evaluated
             // as a create, i.e. open.
             build: function (array $state) use ($class, $record): array {
-                $components = $this->formComponents($class, $state, $record);
+                $components = RecordForm::components($class, $state, $record);
 
                 return ['components' => $components, 'writable' => WritableNames::of($components)];
             },
         );
 
-        $rules = $this->allowedRules($settled);
+        $rules = RecordForm::rules($settled);
 
         $validated = $request->validate(
             $rules,
-            attributes: $this->validationAttributes($settled),
+            attributes: RecordForm::validationAttributes($settled),
         );
 
         // A dotted rule path (`caption.en`) validates into a nested array, and
@@ -551,11 +555,11 @@ final class MobilePanelController
         // The same one transform store() applies, at the second write seam —
         // see TagSeparators and store()'s comment.
         $record->update(TagSeparators::dehydrate(
-            $this->fillMissingPaths($validated, $this->storedPaths($record, array_keys($rules))),
+            RecordForm::fillMissingPaths($validated, RecordForm::storedPaths($record, array_keys($rules))),
             $settled->components(),
         ));
 
-        $this->saveRelations($class, $settled->state(), $record, 'edit', $request->all());
+        RecordForm::saveRelations($class, $settled->state(), $record, 'edit', $request->all());
 
         $serializer = new RecordSerializer($mobile->getCard(), $record->getRouteKeyName(), $class);
 
@@ -613,392 +617,6 @@ final class MobilePanelController
     }
 
     /**
-     * The settled schema's rules, narrowed to the names the settle actually
-     * allowed — which is the mass-assignment whitelist, so this is the one
-     * place both write endpoints decide what may reach the database.
-     *
-     * The intersection is not belt-and-braces. The returned components are the
-     * FINAL pass's, built from state whose non-writable paths were already
-     * reset, so that build can report a name the allow-set dropped on an
-     * earlier pass: `dehydrated(fn (?string $state) => filled($state))` refuses
-     * the submitted `''`, the reset restores the stored value, and the next
-     * build then says "writable" — about a value the client never sent. Taking
-     * the rules off the build alone lets it through, and the column lands NULL
-     * (ConvertEmptyStringsToNull got the `''` first). See
-     * SettledSchema::writable().
-     *
-     * ponytail: the converse is a known, accepted residual — shrink-only can
-     * discard a legitimate write behind a 200. Stored `kind='unlock'` opens
-     * `gate_note`; the client PUTs `{"kind":"promo","gate_note":"..."}`. Pass 1
-     * drops `gate_note` (the submitted `kind` closes it), the reset restores
-     * the stored `kind='unlock'`, pass 2 reports it writable again, and
-     * shrink-only refuses — 200 OK, typing silently discarded. Reachability is
-     * low: `kind` is a Hidden, so a client can never learn it and must invent a
-     * contradicting value for a name it was never shown. The upgrade path is a
-     * per-field refusal report in the response, which is a contract change, not
-     * a fix here.
-     *
-     * P6c Task 3 finding, fixed here rather than worked around in a test: a
-     * plain `array_intersect_key` against `$settled->writable()` was an exact-
-     * key match, which held for every rule name before repeaters because
-     * `WritableNames::of()` USED to be `array_keys(RuleExtractor::
-     * fromComponents(...))` — the same set, by construction. P6c broke that
-     * identity on purpose (see the design spec's "two different name
-     * spaces"): a repeater's rules also carry per-item paths
-     * (`line_items.*.sku`), but `WritableNames` deliberately names only the
-     * whole-array `line_items` — `Arr::has()`/`Arr::set()` have no wildcard
-     * support, so a starred name may never enter the settle's allow-set.
-     * The exact-key intersection this method used to do therefore matched
-     * `line_items` but never `line_items.*.sku`, silently dropping every
-     * per-item rule from what `$request->validate()` was ever given — a row
-     * with an empty required `sku` validated as if the child rule did not
-     * exist. `isRuleNameAllowed()` is the fix: an exact match still wins for
-     * an ordinary field, and a `name.*.` prefix wins only when `name` ITSELF
-     * is writable — so a per-item rule is admitted exactly when its owning
-     * repeater is, and a disabled or relationship repeater's per-item rules
-     * stay excluded right alongside its own, same as before.
-     *
-     * @return array<string, mixed>
-     */
-    private function allowedRules(SettledSchema $settled): array
-    {
-        $writable = $settled->writable();
-
-        return array_filter(
-            RuleExtractor::fromComponents($settled->components()),
-            static fn (string $name): bool => self::isRuleNameAllowed($name, $writable),
-            ARRAY_FILTER_USE_KEY,
-        );
-    }
-
-    /**
-     * `:attribute` for the rules above, so the 422 names the field the way
-     * `/schema`'s published `rules.messages` already does.
-     *
-     * Both come from the field's `getValidationAttribute()` — Filament's own
-     * label-aware attribute, which is what the web panel shows. Without this
-     * the validator falls back to the humanised column name and the two
-     * describe the same rule with two different nouns. The pilot measured
-     * the disagreement on 137 of 187 constrained fields, and on 148 of 187
-     * once the panel's locale was Arabic, where the 422 read
-     * "title.ar مطلوب" against a published "الاسم (عربي) مطلوب".
-     *
-     * Filtered by the same predicate as allowedRules(), for the same reason
-     * and since the same Task 3 finding: an attribute for a name no rule
-     * mentions is inert, but a narrower filter here would make this method
-     * and allowedRules() disagree about which fields exist — a repeater's
-     * per-item attribute (`line_items.*.sku`) must survive here exactly when
-     * its rule does, or its 422 falls back to the humanised path instead of
-     * the field's own label.
-     *
-     * @return array<string, string>
-     */
-    private function validationAttributes(SettledSchema $settled): array
-    {
-        $writable = $settled->writable();
-
-        return array_filter(
-            RuleExtractor::attributesFrom($settled->components()),
-            static fn (string $name): bool => self::isRuleNameAllowed($name, $writable),
-            ARRAY_FILTER_USE_KEY,
-        );
-    }
-
-    /**
-     * Whether a RuleExtractor key may reach `$request->validate()`. Three
-     * shapes, all keyed off a name that is writable in its own right:
-     *
-     *  - the exact name — every ordinary field, and a repeater's or a tags
-     *    field's own whole-array name;
-     *  - `line_items.*.sku` — a repeater's per-item path, which has a child
-     *    segment because a repeater has child components;
-     *  - `labels.*` — a tags field's per-TAG path, which has NO child
-     *    segment because a TagsInput has no children: the per-element rules
-     *    are the component's own, through
-     *    `HasNestedRecursiveValidationRules`. P7 Task 2 measured this: the
-     *    `.*.` prefix alone (the only shape that existed before tags) matched
-     *    `line_items.*.sku` and never `labels.*`, so every per-tag rule was
-     *    extracted, published, and then dropped here — a 21-character tag
-     *    behind `->nestedRecursiveRules(['max:20'])` saved with a 200.
-     *
-     * See allowedRules()'s docblock for why the exact-match-only predicate
-     * that preceded all of this was silently dropping every repeater child
-     * rule.
-     *
-     * @param  list<string>  $writable
-     */
-    private static function isRuleNameAllowed(string $name, array $writable): bool
-    {
-        foreach ($writable as $allowed) {
-            if ($name === $allowed
-                || $name === $allowed . '.*'
-                || str_starts_with($name, $allowed . '.*.')) {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
-    /**
-     * The one way this package merges anything into a payload: path by path,
-     * writing only what the payload does not already answer for.
-     *
-     * Never array_replace_recursive() and never a spread. PHP has no array
-     * merge that is correct for both halves of what arrives here: a spread
-     * replaces a whole `caption` map, dropping the locales the payload did not
-     * send, and array_replace_recursive() merges LISTS BY INDEX — a default of
-     * `['a','b','c']` under a submitted `['c']` stores `['c','b','c']`, a
-     * silent corruption of the user's own choice. Trading one for the other is
-     * how this bug came back twice.
-     *
-     * `Arr::has()` is the whole discrimination, and it is per path: the payload
-     * answers for `caption.en` but not `caption.ar`, and it answers for
-     * `plain_multi` as one indivisible value. An explicitly submitted null is
-     * an answer — Arr::has() reads key presence, not truthiness — so a client
-     * may still clear a field that has a default.
-     *
-     * @param  array<string, mixed>  $payload
-     * @param  array<string, mixed>  $paths  flat `path => value`
-     * @return array<string, mixed>
-     */
-    private function fillMissingPaths(array $payload, array $paths): array
-    {
-        foreach ($paths as $path => $value) {
-            if (Arr::has($payload, $path) || $this->collidesWithScalar($payload, $path)) {
-                continue;
-            }
-
-            data_set($payload, $path, $value);
-        }
-
-        return $payload;
-    }
-
-    /**
-     * Whether an ancestor of this path is already answered by a NON-array
-     * value — `caption` submitted as text while a `caption.ar` default waits to
-     * be filled in underneath it.
-     *
-     * `data_set` would replace that text with `['ar' => ...]`, i.e. the default
-     * beating the user's own input, which no merge here may ever do. The
-     * payload wins: it has answered for the whole attribute, so there is
-     * nothing left underneath it to fill.
-     *
-     * This is the WRITE half of the `title` / `title.ar` collision spec §9
-     * records on the serializer, and it is not resolved here: a panel naming
-     * both a scalar and its dotted children still gets only one of the two
-     * shapes. That is a P3 contract task. This only decides which one loses —
-     * the default, never the submission.
-     */
-    private function collidesWithScalar(array $payload, string $path): bool
-    {
-        $segments = explode('.', $path);
-        array_pop($segments);
-        $prefix = '';
-
-        foreach ($segments as $segment) {
-            $prefix = $prefix === '' ? $segment : "{$prefix}.{$segment}";
-
-            if (Arr::has($payload, $prefix) && ! is_array(Arr::get($payload, $prefix))) {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
-    /**
-     * The record's stored values for the attributes a dotted rule path names,
-     * flattened to the same flat `path => value` shape FormDefaults returns.
-     *
-     * Only those attributes: an undotted path writes its attribute whole, so
-     * there is nothing to preserve underneath it, and re-listing every column
-     * would put values the form never mentioned into the update array.
-     *
-     * A list stays a leaf. Descending into one would reintroduce exactly the
-     * merge-by-index corruption fillMissingPaths() exists to refuse.
-     *
-     * @param  list<string>  $paths
-     * @return array<string, mixed>
-     */
-    private function storedPaths(Model $record, array $paths): array
-    {
-        $stored = [];
-
-        foreach ($paths as $path) {
-            if (! str_contains($path, '.')) {
-                continue;
-            }
-
-            $attribute = explode('.', $path, 2)[0];
-            $value = $record->getAttribute($attribute);
-
-            if (is_array($value)) {
-                $stored = [...$stored, ...$this->leafPaths([$attribute => $value])];
-            }
-        }
-
-        return $stored;
-    }
-
-    /**
-     * @param  array<array-key, mixed>  $values
-     * @return array<string, mixed>
-     */
-    private function leafPaths(array $values, string $prefix = ''): array
-    {
-        $paths = [];
-
-        foreach ($values as $key => $value) {
-            $path = $prefix === '' ? (string) $key : "{$prefix}.{$key}";
-
-            if (is_array($value) && $value !== [] && ! array_is_list($value)) {
-                $paths = [...$paths, ...$this->leafPaths($value, $path)];
-
-                continue;
-            }
-
-            $paths[$path] = $value;
-        }
-
-        return $paths;
-    }
-
-    /**
-     * The form as it stands for these values — the one place the write path
-     * builds a schema, so store() and update() cannot drift apart on which
-     * fields exist.
-     *
-     * The host is seeded with the submitted values, not left empty, because
-     * `getComponents()` filters hidden components and a hidden field yields no
-     * rule: extracting against an empty form would silently drop the value of
-     * every field a `visible(fn (Get $get) => ...)` closure reveals. It also
-     * cannot be a null host — `Schema::make()` accepts one, but the first such
-     * closure then fatals inside `isHidden()` on `Schema::getLivewire()`, whose
-     * return type is not nullable: a 500 on every write to a reactive form.
-     *
-     * The record is what makes this differ between store() and update(), and
-     * it carries both halves: `Schema::record()` *is* `model()`, and the
-     * operation is derived from it rather than passed separately, so the two
-     * can never disagree about which one this is.
-     *
-     * ponytail: accepted residual — plain `getComponents()`, not
-     * `getComponents(withHidden: true)` the way StateController's read side
-     * calls it. A top-level `->hidden()->dehydratedWhenHidden()` field
-     * genuinely IS writable (`isDehydrated()` only excludes a field that is
-     * hidden and NOT re-dehydrated-when-hidden), but this call drops it before
-     * SettledSchema or WritableNames ever sees it, so it silently never
-     * writes even though `/state` — which does pass `withHidden: true` —
-     * reports it writable. Exotic shape; the honest fix is passing
-     * `withHidden: true` on this path too, not a filter over on `/state`.
-     *
-     * @param  class-string  $class
-     * @param  array<string, mixed>  $state
-     * @return list<object>
-     */
-    /**
-     * The relation pass: what Filament's own CreateRecord/EditRecord run as
-     * `$this->form->model($record)->saveRelationships()` after the attribute
-     * save. A `Select::multiple()->relationship()` has no column — this is
-     * its only way into the database.
-     *
-     * Rebuilt from the SETTLED state rather than reusing the settle's own
-     * components, because store()'s settle ran before the record existed and
-     * `BelongsToModel::saveRelationships()` refuses without an existing
-     * record. The state is the settled one, so every gate the rebuild
-     * answers is evaluated against values no crafted payload could have
-     * steered — same property the validation pass relies on.
-     *
-     * The `Arr::has($payload, ...)` guard is the difference between absent
-     * and empty, and it is load-bearing: a relation the request never
-     * mentioned is not in the settled state (a BelongsToMany is not an
-     * attribute, so the trusted floor never carries it), and syncing that
-     * absence would CLEAR a pivot the user never touched. Explicit `[]`
-     * stays a deliberate clear.
-     *
-     * The disabled refusal lives in the descent (relationWriteComponents),
-     * fail closed — a disabled picker's crafted ids neither attach nor
-     * degrade into a clearing sync. A sync that genuinely throws propagates:
-     * turning it into a 200 would be the silent data loss this package
-     * refuses everywhere else.
-     *
-     * @param  array<string, mixed>  $state  the settled state
-     * @param  array<string, mixed>  $payload  the raw request payload
-     */
-    private function saveRelations(string $class, array $state, Model $record, string $operation, array $payload): void
-    {
-        $components = $class::form(
-            $this->formSchema($class, $state, $operation, $record),
-        )->getComponents();
-
-        foreach (RuleExtractor::relationWriteComponents($components) as $name => $component) {
-            if (! Arr::has($payload, $name)) {
-                continue;
-            }
-
-            $component->saveRelationships();
-        }
-    }
-
-    private function formComponents(string $class, array $state, ?Model $record): array
-    {
-        return $class::form($this->formSchema(
-            $class,
-            $state,
-            $record === null ? 'create' : 'edit',
-            $record,
-        ))->getComponents();
-    }
-
-    /**
-     * The one Schema construction every endpoint here goes through.
-     *
-     * `Schema::make()` accepts a null host, but that is what makes any
-     * `visible(fn (Get $get) => ...)` fatal inside `isHidden()` — see
-     * formComponents() above.
-     *
-     * `->model()` is what Filament's own resource pages set. Without it a
-     * `Select::relationship()` resolves no options at all (`getRelationship()`
-     * reaches for the schema's model instance and fails on null), so a required
-     * foreign key arrives at the phone as an empty picker and every write to
-     * that resource 422s on a field the client had no legal value for.
-     *
-     * `->operation()` is not optional either, and nothing in this package set
-     * it until review found the hole. `Schema::getOperation()` falls through to
-     * `getLivewire()::class` when unset — here, `HeadlessSchemaHost` — which
-     * matches neither `'create'`/`'edit'` nor the `instanceof` branch inside
-     * `disabledOn()`/`hiddenOn()`/`visibleOn()`. **Every** operation-scoped
-     * gate therefore evaluated false, and `disabledOn('edit')` is *the*
-     * idiomatic immutable-after-create gate: slug, sku, email, type.
-     *
-     * `$record` is passed only where there genuinely is one. It is what makes
-     * `disabled(fn (?Model $record) => ...)` answer for the row being edited
-     * instead of answering as a create, and a non-nullable `Model $record`
-     * hint stop throwing.
-     *
-     * @param  class-string  $class
-     * @param  array<string, mixed>  $state
-     */
-    private function formSchema(string $class, array $state, string $operation, ?Model $record = null): Schema
-    {
-        return Schema::make($this->host($state))
-            ->model($record ?? $class::getModel())
-            ->operation($operation);
-    }
-
-    /**
-     * @param  array<string, mixed>  $state
-     */
-    private function host(array $state): HeadlessSchemaHost
-    {
-        $host = new HeadlessSchemaHost();
-        $host->setMobileState($state);
-
-        return $host;
-    }
-
-    /**
      * The resource's infolist as the walker sees it — the same walk /schema
      * publishes, so the detail payload cannot drift from the detail screen the
      * client was told to render.
@@ -1036,8 +654,8 @@ final class MobilePanelController
             // The cost is bounded and read-only: infolistPaths() decides which
             // columns get serialised, never what gets written, and it already
             // falls back to the card's fields. Every write path does get the
-            // record — see formComponents().
-            $components = $class::infolist($this->formSchema($class, $state, 'view'))
+            // record — see RecordForm::components().
+            $components = $class::infolist(RecordForm::schema($class, $state, 'view'))
                 ->getComponents();
         } catch (Throwable $e) {
             // Same construction-time hazard /schema guards against: a closure
@@ -1063,7 +681,7 @@ final class MobilePanelController
      * The form's leaf field names, for serialising a record the edit screen
      * will prefill.
      *
-     * Unlike infolistPaths(), this DOES pass the record: formComponents()
+     * Unlike infolistPaths(), this DOES pass the record: RecordForm::components()
      * already does so on every write path, and an edit form that resolves its
      * gates as a create is the defect Task 6 of P2-Laravel closed. The
      * try/catch mirrors infolistPaths(): a throwing form costs the prefill,
@@ -1071,23 +689,226 @@ final class MobilePanelController
      *
      * @param  class-string  $class
      * @param  array<string, mixed>  $state
-     * @return list<string>
+     * @return array{paths: list<string>, repeaterRows: array<string, list<array<string, mixed>>>}
      */
-    private function formPaths(string $class, string $resourceKey, array $state, Model $record): array
+    private function formProjection(string $class, string $resourceKey, array $state, Model $record): array
     {
         $walker = new SchemaWalker(new WalkWarnings());
 
         try {
-            $components = $this->formComponents($class, $state, $record);
+            $components = RecordForm::components($class, $state, $record);
         } catch (Throwable $e) {
             Log::warning('[filament-mobile] could not build the form schema for '
                 . class_basename($class) . ', the edit form will open unprefilled: '
                 . $e->getMessage());
 
-            return [];
+            return ['paths' => [], 'repeaterRows' => []];
         }
 
-        return $this->leafNames($walker->walk($components, class_basename($class), $resourceKey));
+        $nodes = $walker->walk($components, class_basename($class), $resourceKey);
+
+        // A RELATIONSHIP repeater is the one repeater leafNames() must not
+        // keep: it has no column of its own — its rows are child records the
+        // relation pass writes (P9), never an attribute on this model — so
+        // collecting its name would have RecordSerializer read a non-existent
+        // attribute, and for the common idiom that names the field after the
+        // relationship (`Repeater::make('tags')->relationship()`) data_get()
+        // would resolve the RELATION and publish whole child models, well past
+        // the card's whitelist.
+        //
+        // It is identified off the COMPONENTS, not the walked node. Before P9
+        // the node itself carried the tell (`config.readOnly` and
+        // `writable: false` together); a relationship repeater is writable
+        // now, so its node is indistinguishable from a JSON-column
+        // repeater's, and the answer has to come from the component tree.
+        //
+        // Subtracted from the ordinary path pass and then published by a pass
+        // of its own — PROJECTED onto the item template's declared child
+        // fields, which is the distinction that makes it publishable at all.
+        // Leaving it merely absent is what shipped the data loss this pass
+        // exists to close: the client seeded the writable field to null,
+        // `payloadFor()` sent that null, and `Arr::has()` read a present null
+        // as a deliberate clear, so saving an unrelated column deleted every
+        // child row. See RepeaterWriteTest's null case.
+        $repeaters = $this->relationshipRepeaters($components);
+
+        return [
+            'paths' => array_values(array_diff(
+                $this->leafNames($nodes),
+                array_keys($repeaters),
+            )),
+            'repeaterRows' => $this->repeaterRelationRows(
+                $repeaters,
+                $this->repeaterChildNames($nodes),
+                $record,
+            ),
+        ];
+    }
+
+    /**
+     * Each relationship repeater's rows, as the wire shape the client's
+     * repeater field seeds from and hands straight back: a list of maps, one
+     * key per field the item template declares.
+     *
+     * The projection is the whole point. `$record->tags` is a collection of
+     * whole child models — timestamps, foreign keys, anything else on the
+     * table — and publishing that would put columns no screen declared onto
+     * the wire. Only the template's own leaf names travel, the same whitelist
+     * discipline the card and infolist passes follow.
+     *
+     * Row identity deliberately does not travel: the save is
+     * delete-all-then-recreate (keyless state, pinned in RepeaterWriteTest),
+     * so a child's id would be a value the client cannot round-trip
+     * meaningfully. What it round-trips is content.
+     *
+     * ponytail: rows arrive in the relation's own order, so a repeater
+     * declaring `->orderColumn()` is served by that column only if the
+     * relationship already sorts on it. Read the order column through the
+     * component if a panel shows it mattering.
+     *
+     * @param  array<string, object>  $repeaters
+     * @param  array<string, list<string>>  $childNames
+     * @return array<string, list<array<string, mixed>>>
+     */
+    private function repeaterRelationRows(array $repeaters, array $childNames, Model $record): array
+    {
+        $rows = [];
+
+        foreach ($repeaters as $name => $component) {
+            $fields = $childNames[$name] ?? [];
+
+            if ($fields === []) {
+                continue;
+            }
+
+            try {
+                $relation = $component->getRelationship();
+
+                if ($relation === null) {
+                    continue;
+                }
+
+                $children = $relation->get();
+            } catch (Throwable $e) {
+                // The same degradation every other read here takes: this one
+                // field opens empty rather than the detail screen failing.
+                // Absent, not `[]` — an empty list is a real answer meaning
+                // "no rows", and a client that cannot tell them apart would
+                // submit a deliberate clear it never asked for.
+                Log::warning('[filament-mobile] could not read relationship repeater `'
+                    . $name . '` on ' . class_basename($record::class) . ': ' . $e->getMessage());
+
+                continue;
+            }
+
+            $rows[$name] = array_values(array_map(
+                function (Model $child) use ($fields): array {
+                    $row = [];
+
+                    foreach ($fields as $field) {
+                        $row[$field] = data_get($child, $field);
+                    }
+
+                    return $row;
+                },
+                $children->all(),
+            ));
+        }
+
+        return $rows;
+    }
+
+    /**
+     * Every repeater node's item-template leaf names, keyed by the repeater's
+     * own name — read off the WALKED nodes rather than re-descending the
+     * components, because the walk already published the template once as
+     * `children` and its leafNames() answer is the one the client renders
+     * against.
+     *
+     * @param  list<array<string, mixed>>  $nodes
+     * @return array<string, list<string>>
+     */
+    private function repeaterChildNames(array $nodes): array
+    {
+        $names = [];
+
+        foreach ($nodes as $node) {
+            if (! is_array($node['children'] ?? null)) {
+                continue;
+            }
+
+            if (($node['type'] ?? null) === 'repeater') {
+                if (is_string($node['name'] ?? null)) {
+                    $names[$node['name']] = $this->leafNames($node['children']);
+                }
+
+                continue;
+            }
+
+            $names = [...$names, ...$this->repeaterChildNames($node['children'])];
+        }
+
+        return $names;
+    }
+
+    /**
+     * Every relationship repeater in a form tree, keyed by its name — for
+     * formProjection() above, which needs both the names (to subtract from the
+     * ordinary path pass) and the components (to read their relationships).
+     * One traversal serving both is why this returns the map rather than the
+     * list it used to.
+     *
+     * Disabled or not: `savesViaRelationship()` is a fact about the
+     * component's shape, not its gates, so a disabled relationship repeater —
+     * refused by the write path — is collected here too. Its rows are then
+     * published like any other's, which is correct: the field renders
+     * read-only from its own `disabled` flag, and a client that cannot see
+     * the rows is exactly what caused them to be destroyed.
+     *
+     * Layout containers are recursed; a repeater's item template is not — its
+     * children are per-item paths (`items.*.field`), never top-level names,
+     * so a nested relationship repeater can never reach the projection anyway.
+     *
+     * @param  iterable<mixed>  $components
+     * @return array<string, object>
+     */
+    private function relationshipRepeaters(iterable $components): array
+    {
+        $names = [];
+
+        foreach ($components as $component) {
+            if (! is_object($component) || ComponentTypeMap::isSkipped($component)) {
+                continue;
+            }
+
+            $type = ComponentTypeMap::for($component);
+
+            if ($type === null) {
+                continue;
+            }
+
+            if ($type === 'repeater') {
+                if (FieldPersistence::savesViaRelationship($component)) {
+                    try {
+                        $name = $component->getName();
+                    } catch (Throwable) {
+                        continue;
+                    }
+
+                    if (is_string($name) && $name !== '') {
+                        $names[$name] = $component;
+                    }
+                }
+
+                continue;
+            }
+
+            if (in_array($type, ComponentTypeMap::LAYOUT_TYPES, true)) {
+                $names = [...$names, ...$this->relationshipRepeaters(ChildComponents::of($component))];
+            }
+        }
+
+        return $names;
     }
 
     /**
@@ -1119,24 +940,12 @@ final class MobilePanelController
      * recursion closes this leak as a side effect of the fix, not just the
      * missing-key defect the tests below name.
      *
-     * A RELATIONSHIP repeater is the one exception: it has no column of its
-     * own — `Repeater::relationship()` writes child rows through Filament's
-     * own saveRelationships(), never an attribute on this model — so
-     * collecting its name would have RecordSerializer read a non-existent
-     * attribute and publish it as an ordinary null column instead of leaving
-     * it absent the way every other read-only, no-column thing on this
-     * contract is absent.
-     *
-     * It is identified by `config.readOnly` AND `writable: false` together,
-     * and both halves are load-bearing. `relationship()` earns both (it sets
-     * `dehydrated(false)` as a literal, which is what `neverPersists()`
-     * publishes as `writable: false`). `readOnly` ALONE stopped meaning "no
-     * column" when P6c's close-out started publishing it for a nested
-     * repeater and for one whose item template holds a child that would not
-     * round-trip — both of which have a real column whose stored rows must
-     * still be READABLE, since refusing the control is precisely how their
-     * data is being protected. Keying on `readOnly` alone silently dropped
-     * those columns from every GET.
+     * Every repeater's own name IS collected here, relationship repeaters
+     * included: distinguishing those is a component-level question (P9 made
+     * them writable, so the node no longer carries a tell), and
+     * formProjection() subtracts them from the attribute pass before
+     * republishing their rows off the relationship — see
+     * relationshipRepeaters().
      *
      * @param  list<array<string, mixed>>  $nodes
      * @return list<string>
@@ -1147,8 +956,7 @@ final class MobilePanelController
 
         foreach ($nodes as $node) {
             if (($node['type'] ?? null) === 'repeater') {
-                if (is_string($node['name'] ?? null)
-                    && ! (($node['config']['readOnly'] ?? false) === true && ($node['writable'] ?? true) === false)) {
+                if (is_string($node['name'] ?? null)) {
                     $names[] = $node['name'];
                 }
 

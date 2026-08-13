@@ -45,6 +45,12 @@ it('matches the committed record-payload contract snapshot', function () {
     $banner = seedBannerWith([
         'name' => 'Sale',
         'body_html' => '<p>Hello <strong>world</strong> and <a href="https://example.test">link</a></p>',
+        // A3: repeater rows on the record payload — two rows, so the golden
+        // pins the list-of-maps shape a repeater's value actually travels as.
+        'line_items' => [
+            ['sku' => 'A-1', 'qty' => 2],
+            ['sku' => 'B-2', 'qty' => 5],
+        ],
     ]);
 
     $body = $this->actingAs(makeUser('admin'))
@@ -61,6 +67,20 @@ it('matches the committed record-payload contract snapshot', function () {
         file_put_contents(RECORD_SNAPSHOT, $json);
     }
 
+    // Compared as STRUCTURE, not bytes. The golden is generated on SQLite and
+    // read by the Dart contract test, but `line_items` comes back through a
+    // json column, and MySQL returns object keys sorted — so a byte compare
+    // pinned the driver's key order as though it were the contract. It is not:
+    // a JSON object is unordered and the client reads every value by name.
+    //
+    // What this test exists to catch survives intact, because keySorted()
+    // changes only ordering: a renamed key (the `__rich` envelope's `doc`,
+    // hand-typed on both sides — see the docblock), a dropped key, a changed
+    // value or a changed type all still fail. Only "the keys came back in a
+    // different order" stops being a failure. The file is still written
+    // pretty-printed under UPDATE_SNAPSHOTS=1, so it stays readable as
+    // documentation.
     expect(RECORD_SNAPSHOT)->toBeReadableFile()
-        ->and($json)->toBe(file_get_contents(RECORD_SNAPSHOT));
+        ->and(keySorted(json_decode($json, true)))
+        ->toBe(keySorted(json_decode(file_get_contents(RECORD_SNAPSHOT), true)));
 });

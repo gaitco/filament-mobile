@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 use Gait\FilamentMobile\Tests\Fixtures\Resources\BannerResource;
+use Gait\FilamentMobile\Tests\Fixtures\Resources\CardedTagsBannerResource;
 use Gait\FilamentMobile\Tests\Fixtures\Resources\CardOverriddenCompanyResource;
 use Gait\FilamentMobile\Tests\Fixtures\Resources\CompanyResource;
 use Gait\FilamentMobile\Tests\Fixtures\Resources\NarrowedCompanyResource;
@@ -65,6 +66,42 @@ it('publishes a non-id recordKey when the related model uses one', function () {
     $tags = collect($relations)->firstWhere('key', 'tags');
 
     expect($tags['recordKey'])->toBe('name');
+});
+
+it('publishes the child resource key when exactly one mobile resource serves the child (P9)', function () {
+    // The write capability on the wire: Banner has exactly one mobile
+    // resource in this set (BannerResource), so `banners` rows have a form
+    // to write against and the node says which. Absent — never null — when
+    // the answer is zero or several, so a client never invents the
+    // capability: it reads an absent key as read-only.
+    $relations = schemaFor('companies')['relations'];
+
+    expect($relations[0])->toHaveKey('resource')
+        ->and($relations[0]['resource'])->toBe('banners');
+});
+
+it('publishes no resource key when no mobile resource serves the child', function () {
+    // Tag has no mobile resource in this set, so `tags` is read-only on
+    // this API: no form to write against, and the write endpoints 404 (see
+    // RelationWriteEndpointTest for the endpoint half).
+    $tags = collect(schemaFor('banners')['relations'])->firstWhere('key', 'tags');
+
+    expect($tags)->not->toHaveKey('resource');
+});
+
+it('publishes no resource key when SEVERAL mobile resources serve the child', function () {
+    // Two resources over Banner, so no single form owns the write and the
+    // package refuses to guess — the same rule findByModel() has always
+    // applied, now published as an absent key.
+    config()->set('filament-mobile.resources', [
+        BannerResource::class,
+        CardedTagsBannerResource::class,
+        CompanyResource::class,
+    ]);
+
+    $relations = schemaFor('companies')['relations'];
+
+    expect($relations[0])->not->toHaveKey('resource');
 });
 
 it('publishes the host-declared relation card in place of the derived one', function () {

@@ -165,16 +165,16 @@ it('does not fail CI over a multi-file field alone — it is informational', fun
         ->assertExitCode(0);
 });
 
-it('reports a relationship repeater as unsupported this slice, informationally', function () {
-    // Assert on wording unique to this section, the same discipline the
-    // 'no such action' test above documents: 'RepeaterProblemResource' names
-    // nothing DriftResource or BannerResource's OWN findings would ever
-    // print, and 'Repeater::relationship()' appears nowhere else doctor
-    // prints for this fixture set.
+it('no longer reports a relationship repeater — P9 writes its rows through the relation pass', function () {
+    // P9 inverted this finding: `rel_rows` is SUPPORTED now (the relation
+    // pass calls Filament's own Repeater::saveToRelationship()), so doctor
+    // must say nothing about it. The negative assertion is the point — a
+    // stale "unsupported this slice" line would tell the panel author to
+    // remove a control that works.
     config()->set('filament-mobile.resources', [RepeaterProblemResource::class]);
 
     $this->artisan('filament-mobile:doctor')
-        ->expectsOutputToContain('RepeaterProblemResource.rel_rows: Repeater::relationship()')
+        ->doesntExpectOutputToContain('RepeaterProblemResource.rel_rows')
         ->assertExitCode(0);
 });
 

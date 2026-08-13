@@ -1,5 +1,117 @@
 # Changelog
 
+## 0.6.0 — 2026-08-13
+
+- **Relation writes.** A published relation is no longer read-only by
+  definition. `/schema`'s relation nodes gain a `resource` key — the child
+  **resource's** key — present only when exactly one registered mobile
+  resource owns the related model (`ResourceRegistry::ownersOf()`): zero
+  owners or several and the key is absent and the relation stays a read
+  path. One resolution drives both the key and the endpoints, so the schema
+  and a `404` can never disagree. New endpoints:
+  `POST /{resource}/{record}/relations/{relation}`,
+  `PUT .../relations/{relation}/{child}`,
+  `DELETE .../relations/{relation}/{child}`. A write against a relation with
+  no single owner — or one never published — is a **404, not a 403**, the
+  read path's own ruling: what this API will never serve does not exist.
+  The form is the **child resource's own**, reused whole, through the same
+  machinery `store()`/`update()` run — `SettledSchema`, rules as the
+  mass-assignment whitelist, defaults under the payload, the `TagSeparators`
+  mirror, the relation pass — now extracted from `MobilePanelController`
+  into `src/Write/RecordForm.php`, the one home both controllers share.
+  Gates: every gate the read endpoint applies, then the child model's own
+  `create` (class-level — no child record exists yet), `update`/`delete`
+  (against the loaded child). Create goes **through the relationship**, so
+  the foreign key is the parent's by construction; `{child}` is the related
+  model's own route key resolved *through the relationship*, so an id that
+  exists under a different parent is a 404, never a cross-parent write.
+  Status codes are `201`/`200`/`200` — delete returns the deleted row,
+  serialized *before* the delete, deliberately not `destroy()`'s 204: the
+  relation client holds a list it must reconcile. A validation failure is a
+  `422` keyed by the child's own field names. **Attach and detach are
+  deliberately not exposed** — pivot operations are a different gesture with
+  a different authorization question. `doctor` names a published relation
+  whose writes are off, distinguishing zero-owner from several-owner,
+  because the fixes differ. The Dart client half (`RelationDescriptor.resource`,
+  `createRelation`/`updateRelation`/`deleteRelation`, `RelationSubmitTarget`,
+  the permission-gated `RelationListScreen` affordances) is
+  `filament_mobile`'s own 0.8.0.
+- **A relationship repeater is editable.** `Repeater::relationship()` — the
+  last repeater shape published `readOnly: true` on principle — writes
+  through Filament's own `saveRelationships()`: the repeater registers its
+  own `saveRelationshipsUsing()` (`Repeater::saveToRelationship()`), and the
+  write path's relation pass reaches it unchanged, the same call Filament's
+  own `CreateRecord`/`EditRecord` make. The caveat is row identity and it is
+  pinned in `RepeaterWriteTest`: keyless state leaves no row to diff
+  against, so **every save is delete-all-then-recreate**. The field still has
+  no column of its own, so the attribute pass never reads one; its rows are
+  published by a pass of their own instead — read off the relationship and
+  **projected onto the item template's declared fields**, so a child's `id`,
+  timestamps and pivot stay off the wire like any other undeclared column.
+  Zero rows publish `[]`, never absence: "no rows" is an answer, and a client
+  that cannot distinguish it from "unknown" has to guess. Two guards make
+  that safe, and both are pinned: the record payload carries the rows so the
+  edit form has something to seed from, and the write path refuses to read a
+  present `null` as a clear — only an explicit `[]` clears. Without either,
+  a writable field the client could not see submitted `null` and destroyed
+  every child row behind a `200`. The remaining read-only shapes are the two
+  that were never about relationships: a nested repeater, and an item
+  template holding a child that would not round-trip. A relationship gate
+  that cannot answer (a throwing `->relationship()` closure) stays refused,
+  fail closed, and is the one relationship shape `doctor` still reports.
+- **Rich-text conversion is memoised per request.** The P6e known weakness —
+  conversion uncached per request — is closed by a per-instance memo on
+  `RecordSerializer`, keyed by the raw string, nulls memoised (a value whose
+  conversion degrades does not pay for its failure twice); one serializer
+  per request makes the memo's lifetime the request's. The
+  `RelationDiscovery::for()` half of the pass P6e envisioned was measured
+  and deliberately **not** done: the split already runs exactly once per
+  resource per request at every HTTP entry point, so there was no redundancy
+  to remove.
+- **`url`/`regex`/`confirmed` are published and enforced.** Three rules the
+  write path never re-derived — a `->url()`, `->regex(...)` or
+  `->confirmed()` field 422'd on the web panel and sailed through mobile,
+  the one direction this package's validation can never drift. The walker
+  publishes `rules.url: true`, `rules.regex` and `rules.confirmed: true`;
+  `RuleExtractor` emits the matching Laravel rules.
+
+  `rules.regex` travels **undelimited** — `^[a-z0-9_]+$`, not
+  `/^[a-z0-9_]+$/` — because a client regex engine takes a bare pattern and
+  compiles the delimited form into one that matches *nothing at all*: the
+  leading `/` becomes a literal and the `^` behind it asserts a start of
+  input already consumed. Published verbatim, a `->regex()` field would be
+  permanently unsubmittable from the phone for values the server accepts, and
+  the "pattern Dart cannot compile fails open" escape never fires because the
+  pattern compiles fine. The server keeps its delimiters, since Laravel's
+  `regex:` rule requires them. A pattern carrying **flags** publishes no hint
+  at all rather than a stripped one: with no inline modifiers on the client,
+  `/x/i` published as `x` would be *stricter* than the server, the same bug
+  mirrored — so it fails open and the server stays the only judge.
+
+  `confirmed` has no Filament accessor — `->confirmed()` registers an
+  ordinary `rule('confirmed', ...)` — so both sides detect it by scanning
+  the field's own resolved `getValidationRules()`. The walker's scan is a
+  new **silent probe** (`declaresConfirmed()`), deliberately not the guarded
+  `read()`: a component whose rule list cannot resolve headlessly throws as
+  an ordinary event here, and a warning about a probe is noise. The
+  confirmation **sibling** is published as a field the client fills, which is
+  the one exception `dehydrated(false)` now carries: Filament's own idiom
+  never persists the second field, but the user still has to type it, and
+  publishing it disabled and unwritable made every `->confirmed()` field
+  permanently `422` — the payload omitted the key the rule reads. It stays
+  out of the persisted set for the reason it always was: no rule of its own,
+  so no validated key, so no column write. An ordinary `dehydrated(false)`
+  field that confirms nothing is still published locked. **A
+  rule-message translation failure now degrades per-field** — a throwing
+  translator costs that field's `messages` map (the client falls back to its
+  own strings per rule), never the component, and never the document; a bare
+  test-double translator no longer takes down `/schema`.
+- **Remote options work inside a repeater row.** `OptionsController::findSelect()`
+  now descends *through* a repeater into its item template: the client
+  renders a row's select off the template and asks for it by its bare child
+  name, so a lookup that stopped at the repeater's border 422'd a node the
+  schema itself published with an `optionsUrl`.
+
 ## 0.5.0 — 2026-08-08
 
 - **`ColorPicker` and `TimePicker`.** Two more previously-unmapped field types
@@ -465,8 +577,11 @@
   because they are configured on the `RichEditor` form component and the
   read path never builds one; `textAlign` is published and not honoured,
   pending the RTL/i18n slice;
-  and the conversion is uncached per request, joining
-  `RelationDiscovery::for()` in the caching pass. This is P6e — the fifth
+  and the conversion was uncached per request at this
+  release — memoised per request in 0.6.0; the `RelationDiscovery::for()`
+  half of that envisioned pass was later measured and deliberately not done,
+  the split already running exactly once per resource per request at every
+  HTTP entry point. This is P6e — the fifth
   of P6's six sub-projects; the Dart client half (`RichDocument`,
   `EntryKind.rich`, `RichEntryTile`, host-wired link tapping) is
   `filament_mobile`'s own 0.5.0.

@@ -14,14 +14,14 @@ use Gait\FilamentMobile\MobileResource;
 use Gait\FilamentMobile\Tests\Fixtures\Models\Banner;
 
 /**
- * The four repeater shapes this slice legitimately cannot support, and
- * nothing else wrong — the fixture that proves doctor's repeater findings
- * are informational, not actionable.
+ * The repeater shapes this slice legitimately cannot support, plus one that
+ * P9 made supportable as the control — the fixture that proves doctor's
+ * repeater findings are informational, not actionable.
  *
  * BannerResource also carries a relationship repeater (`tag_rows`), but ALSO
  * an unresolvable action name and a table action that carries a form, so a
  * run against it always exits 1 for unrelated reasons and cannot isolate the
- * claim "these three shapes alone must not fail CI". Same reasoning as
+ * claim "these shapes alone must not fail CI". Same reasoning as
  * MultiFileResource.
  *
  * None of these fields need a real column: doctor only builds the `form`
@@ -45,8 +45,10 @@ class RepeaterProblemResource extends Resource
     public static function form(Schema $schema): Schema
     {
         return $schema->components([
-            // Writes child rows through Filament's own saveRelationships(),
-            // which this package's write path never calls.
+            // The CONTROL, not a problem: since P9 a relationship repeater
+            // writes its rows through the relation pass, so doctor must NOT
+            // report it. It stays in this fixture precisely so the suite
+            // proves the finding is gone (DoctorCommandTest).
             Repeater::make('rel_rows')
                 ->relationship('tags')
                 ->schema([TextInput::make('name')]),

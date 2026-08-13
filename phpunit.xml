@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+    The configuration Pest was always assumed to have and never had.
+
+    `composer.lock` is gitignored, so CI resolves its own test tooling on
+    every run while a developer keeps whatever version happens to be
+    installed. With no committed config, Pest derives one — and the derivation
+    differs between those two worlds, which is why every `laravel` workflow
+    run since the package existed failed at `vendor/bin/pest` — it read the
+    cache-directory flag as the path to its configuration file and could not
+    parse it as XML — while the same suite passed locally every time. The
+    MySQL job, which exists to catch the SQLite/MySQL
+    dialect split (see .github/workflows/laravel.yml), therefore never ran
+    once.
+
+    Suites mirror `tests/Pest.php`'s `uses(TestCase::class)->in('Unit',
+    'Feature')` so the two cannot drift.
+-->
+<phpunit xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:noNamespaceSchemaLocation="vendor/phpunit/phpunit/phpunit.xsd"
+         bootstrap="vendor/autoload.php"
+         colors="true"
+         cacheDirectory=".phpunit.cache"
+         failOnWarning="true"
+         failOnRisky="true">
+    <testsuites>
+        <testsuite name="Unit">
+            <directory>tests/Unit</directory>
+        </testsuite>
+        <testsuite name="Feature">
+            <directory>tests/Feature</directory>
+        </testsuite>
+    </testsuites>
+    <source>
+        <include>
+            <directory>src</directory>
+        </include>
+    </source>
+</phpunit>

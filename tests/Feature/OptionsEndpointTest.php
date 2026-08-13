@@ -164,3 +164,37 @@ it('rejects a non-scalar record_id with 422 rather than fatalling', function () 
             'state' => [], 'q' => '',
         ])->assertStatus(422);
 });
+
+it('finds a searchable select inside a repeater row template', function () {
+    // L18 server half: the client renders a row's select off the item
+    // template and asks for it by its bare child name. A descent that
+    // stopped at the repeater's border 422'd a node the schema itself
+    // published with an `optionsUrl`.
+    config()->set('filament-mobile.resources', [
+        \Gait\FilamentMobile\Tests\Fixtures\Resources\RowSelectBannerResource::class,
+    ]);
+    Company::create(['name' => 'Acme Row']);
+
+    $body = $this->actingAs(makeUser('admin'))
+        ->postJson('/api/mobile-panel/banners/options', [
+            'field' => 'row_company_id', 'record_id' => null, 'state' => [], 'q' => 'Acme',
+        ])->assertOk()->json();
+
+    expect($body['options'])->toHaveCount(1)
+        ->and($body['options'][0]['label'])->toBe('Acme Row');
+});
+
+it('publishes an optionsUrl on the row select itself', function () {
+    // The other half of the same shape: the walker's config() computes the
+    // remote-search hint for row children exactly as for top-level fields.
+    config()->set('filament-mobile.resources', [
+        \Gait\FilamentMobile\Tests\Fixtures\Resources\RowSelectBannerResource::class,
+    ]);
+
+    $form = collect(schemaDocument()['resources'])->firstWhere('key', 'banners')['form'];
+    $repeater = collect($form)->firstWhere('name', 'line_items');
+    $select = collect($repeater['children'])->firstWhere('name', 'row_company_id');
+
+    expect($select['config']['optionsUrl'])->toBeString()
+        ->and($select['config'])->not->toHaveKey('options');
+});

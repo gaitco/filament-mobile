@@ -83,9 +83,10 @@ class Banner extends Model implements HasRichContent
     }
 
     /**
-     * Minimal by design: this fixture exists to be introspected by
-     * FieldPersistence, not exercised by a write test — the write path never
-     * calls saveRelationships(), so a pivot row is never expected here.
+     * The relation behind every BelongsToMany fixture on BannerResource —
+     * the `tag_ids` select, the `tag_rows` relationship repeater, and the
+     * `tags` relation manager. Written through the relation pass since P3b
+     * (the select) and P9 (the repeater), so pivot rows are expected here.
      *
      * @return BelongsToMany<Tag, $this>
      */

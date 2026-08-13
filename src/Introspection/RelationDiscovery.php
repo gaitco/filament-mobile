@@ -8,6 +8,7 @@ use Filament\Resources\RelationManagers\RelationManager;
 use Gait\FilamentMobile\MobileCard;
 use Gait\FilamentMobile\MobileResource;
 use Gait\FilamentMobile\RelationCard;
+use Gait\FilamentMobile\ResourceRegistry;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\Relation;
 use ReflectionMethod;
@@ -38,23 +39,37 @@ use Throwable;
  */
 final class RelationDiscovery
 {
-    /** @return list<array{key: string, label: string, manager: class-string, columns: list<array{name: string, label: string}>, card: MobileCard}> */
-    public static function for(string $resourceClass, ?MobileResource $mobile = null): array
+    /**
+     * The published entries carry the child model class (`related`) and the
+     * ONE mobile resource serving it (`resource`, null for zero or several)
+     * alongside the read-side keys. Resolved here, once, so `/schema`'s
+     * `resource` key and the write endpoints' 404 can never disagree about
+     * whether a relation's rows are writable — the P6d card lesson applied
+     * to P9's write capability.
+     *
+     * @return list<array{key: string, label: string, manager: class-string, columns: list<array{name: string, label: string}>, card: MobileCard, related: class-string|null, resource: class-string|null}>
+     */
+    public static function for(string $resourceClass, ?MobileResource $mobile = null, ?ResourceRegistry $registry = null): array
     {
-        return self::split($resourceClass, $mobile)['published'];
+        return self::split($resourceClass, $mobile, $registry)['published'];
     }
 
     /** @return array<string, string> class name => reason */
     public static function refusalsFor(string $resourceClass, ?MobileResource $mobile = null): array
     {
-        return self::split($resourceClass, $mobile)['refused'];
+        return self::split($resourceClass, $mobile, null)['refused'];
     }
 
     /** @return array{published: list<array<string, mixed>>, refused: array<string, string>} */
-    private static function split(string $resourceClass, ?MobileResource $mobile): array
+    private static function split(string $resourceClass, ?MobileResource $mobile, ?ResourceRegistry $registry): array
     {
         $published = [];
         $refused = [];
+
+        // Stateless (it reads the config/filament-mobile.resources list or the
+        // panel, never request state), so a caller without one gets a fresh
+        // instance answering identically.
+        $registry ??= new ResourceRegistry();
 
         /** @var list<string> every relationship name read, published or not */
         $seen = [];
@@ -87,6 +102,12 @@ final class RelationDiscovery
 
             $seen[] = $key;
 
+            // The child model class, for the `resource` resolution at the
+            // bottom of the loop. Null when the resource has no instantiable
+            // model — then there is no relationship to ask, and the write
+            // side simply stays unpublished.
+            $relatedClass = null;
+
             // On the resource's own model, not on an owner record: BUILDING a
             // relationship never queries, so an unsaved instance answers the
             // only question there is here — does this name resolve at all.
@@ -114,6 +135,8 @@ final class RelationDiscovery
 
                     continue;
                 }
+
+                $relatedClass = $resolved->getRelated()::class;
             }
 
             try {
@@ -159,6 +182,14 @@ final class RelationDiscovery
                 'manager' => $entry,
                 'columns' => $table['columns'],
                 'card' => $card,
+                // The write capability (P9): exactly one mobile resource
+                // serving the child model means the relation's rows have a
+                // form to write against. Null — zero or several — keeps the
+                // `resource` key off /schema and the write endpoints 404:
+                // absence means unavailable, and guessing between two forms
+                // would write one at random.
+                'related' => $relatedClass,
+                'resource' => $relatedClass === null ? null : $registry->findByModel($relatedClass),
             ];
         }
 

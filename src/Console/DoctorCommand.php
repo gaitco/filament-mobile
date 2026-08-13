@@ -453,12 +453,10 @@ final class DoctorCommand extends Command
     }
 
     /**
-     * Section 8. Four repeater shapes this slice legitimately cannot
+     * Section 8. Three repeater shapes this slice legitimately cannot
      * support — a panel legitimately has these, and the slice simply does
      * not support them (design spec, "Known weaknesses, stated now"):
      *
-     *  - `->relationship()`: writes child rows through Filament's own
-     *    saveRelationships(), which this package's write path never calls.
      *  - a repeater containing a `live()` field: the item template is
      *    static, so that field's row will not re-settle.
      *  - a nested repeater: a repeater inside another repeater's item
@@ -470,6 +468,11 @@ final class DoctorCommand extends Command
      *    instead, and this is the only place a panel author can learn which
      *    child cost them the control.
      *
+     * A `->relationship()` repeater is NOT in this list since P9: its rows
+     * write through the relation pass, so it is published editable. The one
+     * relationship shape still reported is the gate that cannot answer — a
+     * throwing `relationship()` closure, which stays refused, fail closed.
+     *
      * Informational, like multiFileFields() above: a panel author is not
      * surprised, but nothing here is wrong with the panel's declaration,
      * only with this slice's support for it. Never folded into $actionable
@@ -477,9 +480,11 @@ final class DoctorCommand extends Command
      *
      * `live` and nesting are read off the already-built `$panel` document —
      * both are published, through the SAME guarded reads SchemaWalker uses.
-     * The other two are read off the components, because `/schema` publishes
-     * only the verdict (`config.readOnly`) and never the reason, and a
-     * finding that cannot name the offending child is not worth printing.
+     * The relationship-gate and round-trip findings are read off the
+     * components, because `/schema` publishes only the verdict
+     * (`config.readOnly`) and never the reason, and a finding that cannot
+     * name the offending child (or the gate's own message) is not worth
+     * printing.
      *
      * @param  array<class-string, MobileResource>  $mobile
      * @param  array<string, mixed>  $panel
@@ -517,14 +522,21 @@ final class DoctorCommand extends Command
 
     /**
      * The two refusals only the components can explain: a relationship
-     * repeater, and one whose item template holds a child that would not
-     * round-trip.
+     * repeater whose gate cannot answer, and one whose item template holds a
+     * child that would not round-trip.
+     *
+     * A RESOLVABLE relationship repeater is no longer a finding: since P9 its
+     * rows write through the relation pass (Filament's own
+     * Repeater::saveToRelationship()), so it is published editable and saved.
+     * What remains reportable is the gate that THROWS — published read-only,
+     * refused by the write path, and otherwise silent.
      *
      * A repeater the write path refuses outright (`disabled()`, never
      * dehydrated) is skipped for the child finding — every child of a
      * disabled container reads as disabled too, so it would report a child
-     * as the cause when the container is. It is still reported when it is a
-     * relationship repeater, which is refused for that reason first.
+     * as the cause when the container is. It is still reported when its
+     * relationship gate cannot answer, which is refused for that reason
+     * first.
      *
      * @param  iterable<mixed>  $components
      * @param  list<string>  $lines
@@ -539,8 +551,8 @@ final class DoctorCommand extends Command
             if (ComponentTypeMap::for($component) === 'repeater') {
                 $label = $resourceName . '.' . ($this->componentName($component) ?? '?');
 
-                if (FieldPersistence::refusesRelationship($component)) {
-                    $lines[] = $label . ': Repeater::relationship() is unsupported this slice — writes child rows through Filament\'s own saveRelationships(), which this package\'s write path never calls';
+                if (FieldPersistence::refusesRelationship($component, $error) && $error !== null) {
+                    $lines[] = $label . ': its relationship gate cannot answer (' . $error->getMessage() . '), so the repeater is published read-only — a gate that cannot answer refuses';
                 } elseif (! FieldPersistence::refuses($component)) {
                     $withheld = RuleExtractor::withheldChild(ChildComponents::of($component));
 
@@ -608,7 +620,10 @@ final class DoctorCommand extends Command
      * the only channel that explains why a relation manager the panel
      * declares never reaches `/schema`. Every entry `getRelations()`
      * returns ends up here or in a published relation; nothing is silently
-     * dropped.
+     * dropped. The section's second half (P9) names published relations
+     * whose WRITE endpoints are off because the child model resolves to
+     * zero or several mobile resources — again the only channel, since
+     * /schema expresses the same fact by withholding the `resource` key.
      *
      * Informational, like unresolvableCardPaths() above: a refusal is this
      * package correctly declining to approximate a relation it cannot
@@ -649,6 +664,35 @@ final class DoctorCommand extends Command
             // useful one for the panel author.
             foreach (RelationDiscovery::refusalsFor($class, $mobile[$class] ?? null) as $manager => $reason) {
                 $lines[] = class_basename($class) . '.' . class_basename($manager) . ': ' . $reason;
+            }
+        }
+
+        // P9, second half of the section: a PUBLISHED relation whose rows are
+        // read-only because the child model resolves to zero or several
+        // mobile resources. The relation works — it reads — so it is no
+        // refusal; but its write endpoints 404 and /schema carries no
+        // `resource` key, and nothing else tells the panel author why the
+        // Add/Edit affordances never appear. Scoped to mobile resources: a
+        // resource the API does not serve at all has no relations to write
+        // through, and listing every one of those would bury the signal.
+        //
+        // Zero matches is the ordinary case (the child simply is not a mobile
+        // resource); several means two forms could own the write and the
+        // package refuses to guess. The count is what tells them apart.
+        foreach (array_keys($mobile) as $class) {
+            foreach (RelationDiscovery::for($class, $mobile[$class], $registry) as $relation) {
+                if ($relation['related'] === null || $relation['resource'] !== null) {
+                    continue;
+                }
+
+                $count = count($registry->ownersOf($relation['related']));
+                $why = $count === 0
+                    ? 'no mobile resource serves it'
+                    : $count . ' mobile resources serve it, and the write would have to guess between them';
+
+                $lines[] = class_basename($class) . '.' . $relation['key']
+                    . ': rows are read-only — the child model ' . class_basename($relation['related'])
+                    . ' is not unambiguously one resource (' . $why . '), so the write endpoints 404';
             }
         }
 

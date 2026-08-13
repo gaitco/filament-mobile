@@ -69,26 +69,28 @@ final class ComponentTypeMap
         // anything else normalises to 'hex', the same rule direction()
         // applies to a bogus `filament-panels::layout.direction`.
         'Filament\\Forms\\Components\\ColorPicker' => 'color',
-        // Upload is deferred to a later phase (P6) — the client cannot yet
-        // send a file — so both the plain and Spatie-backed upload fields map
-        // to `file`, which the walker always emits as `config.readOnly: true`.
-        // A real panel carries 12 of these; unmapped, every one is dropped.
+        // Single-file upload shipped in P6a: a plain or Spatie-backed upload
+        // field maps to `file` and is editable through the separate upload
+        // endpoint. Only the MULTIPLE shape stays `config.readOnly: true`
+        // (the walker's `file` branch) — deferred, and reported by doctor.
         'Filament\\Forms\\Components\\FileUpload' => 'file',
         'Filament\\Forms\\Components\\SpatieMediaLibraryFileUpload' => 'file',
-        // Raw HTML, edited as text. A real WYSIWYG needs a Flutter dependency
-        // this package does not take, and read-only would not clear the
-        // blocker: an unmapped type gets no rule, so a NOT NULL column still
-        // fails to insert. Honest rather than good; P6 replaces it.
+        // Raw HTML, edited as text. Reading shipped in P6e (the record payload
+        // carries a converted ProseMirror document beside the raw value); a
+        // real WYSIWYG editor needs a Flutter dependency the client does not
+        // take, so the FORM field stays a textarea. Honest rather than good.
         'Filament\\Forms\\Components\\RichEditor' => 'textarea',
         // A JSON-column repeater: its item template is published once as
         // `children` (see SchemaWalker::childrenOf() via ChildComponents,
         // which already reaches getChildSchema()), and its value round-trips
         // as an ordinary array through the unmodified write path. Deliberately
         // NOT in LAYOUT_TYPES — see that constant's docblock. A relationship
-        // repeater (`->relationship()`) writes child rows through Filament's
-        // own saveRelationships(), which this package's write path never
-        // calls, so it maps to the same type but the walker always publishes
-        // it `config.readOnly: true` — out of scope this slice.
+        // repeater (`->relationship()`) maps to the same type but writes its
+        // rows as child records through Filament's own saveRelationships(),
+        // which the controller's relation pass calls (P9 — see
+        // FieldPersistence::savesViaRelationship()'s Repeater branch): the
+        // walker publishes it editable, and RuleExtractor mints it as a
+        // relation-write leaf with no rule, so the rows never touch a column.
         'Filament\\Forms\\Components\\Repeater' => 'repeater',
 
         // Layout

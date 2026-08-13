@@ -11,7 +11,10 @@ them — and exposes only the resources you explicitly opt in.
 | `GET /api/mobile-panel/schema` | Every opted-in resource the user may see: labels, permissions, card, sorts, form and infolist |
 | `GET /api/mobile-panel/{resource}` | A paginated list of card payloads |
 | `GET /api/mobile-panel/{resource}/{record}` | One record, widened to the form's and infolist's fields, plus per-record permissions |
-| `GET /api/mobile-panel/{resource}/{record}/relations/{relation}` | One relation manager's child rows, read-only, same envelope as the list |
+| `GET /api/mobile-panel/{resource}/{record}/relations/{relation}` | One relation manager's child rows, same envelope as the list |
+| `POST /api/mobile-panel/{resource}/{record}/relations/{relation}` | Create a child row through the relationship, validated from the child resource's own form |
+| `PUT /api/mobile-panel/{resource}/{record}/relations/{relation}/{child}` | Update a child row, same validation |
+| `DELETE /api/mobile-panel/{resource}/{record}/relations/{relation}/{child}` | Delete a child row — 200 with the deleted row, deliberately not 204 |
 | `POST /api/mobile-panel/{resource}` | Create, validated from the resource's own schema |
 | `PUT /api/mobile-panel/{resource}/{record}` | Update, same validation |
 | `DELETE /api/mobile-panel/{resource}/{record}` | Delete, gated on the record's own policy |
@@ -178,7 +181,7 @@ fields the infolist names.
 | [Key/value](#keyvalue) | Free-form key-value pairs, gated by four client hints |
 | [Colour](#colour) | `ColorPicker` in the format the panel declared, never converted |
 | [Time and date bounds](#time-and-date-bounds) | `TimePicker` as its own type, and the `minDate`/`maxDate` a picker declares |
-| [Relations](#relations) | Relation managers as read-only child lists |
+| [Relations](#relations) | Relation managers as child lists — writable when exactly one resource owns the child model |
 | [Rich text](#rich-text) | `RichEditor` columns as a structured document, sanitised by construction |
 | [Dashboard](#dashboard) | The panel's opted-in widgets, computed live |
 | [Locale and direction](#locale-and-direction) | The panel's own locale and `ltr`/`rtl`, so the phone lays out the way the panel does |
@@ -215,7 +218,7 @@ database rather than at validation.
 | `FileUpload` | `file` | **single-file only** — a `->multiple()` upload publishes `readOnly: true` |
 | `SpatieMediaLibraryFileUpload` | `file` | same |
 | `RichEditor` | `textarea` | **edited as raw HTML**; it renders as a document on read (see [Rich text](#rich-text)) but editing is still markup |
-| `Repeater` | `repeater` | JSON-column only, and only when **every** child round-trips |
+| `Repeater` | `repeater` | JSON-column or `->relationship()`; only when **every** child round-trips |
 | `Hidden` | — | deliberately skipped from the wire; its `->default()` still applies on create |
 
 Layout components pass through as containers: `Section`, `Grid`, `Tabs`,
@@ -244,6 +247,28 @@ That is how the pilot panel handled its phone-input and icon-picker plugins.
 The constraint is that the value must be a type the contract already defines —
 you can point a new component at an existing renderer, but you cannot invent a
 new one without a change to this package.
+
+### Rule hints travel with the field — and are enforced
+
+`->url()`, `->regex(...)` and `->confirmed()` publish `rules.url: true`,
+`rules.regex` — the pattern **verbatim**, because a rewritten pattern could
+disagree with the server's — and `rules.confirmed: true`, and the write path
+enforces all three: `RuleExtractor` emits the matching Laravel rules, so a
+field that 422'd on the web panel no longer sails through mobile. Mobile
+looser than web is the one direction this package's validation can never
+drift. `confirmed` is the only one of the three with no Filament accessor:
+`->confirmed()` registers an ordinary `rule('confirmed', ...)`, so both the
+walker and the extractor detect it by scanning the field's own resolved
+`getValidationRules()`. The walker's scan is a **silent probe**
+(`declaresConfirmed()`), deliberately not the guarded `read()` every other
+accessor goes through — a component whose rule list cannot resolve headlessly
+(a `Select` whose `in:` rule needs relationship context) throws as an
+*ordinary* event here, and a warning about a probe is noise, not a defect.
+
+**A rule-message translation failure degrades per-field.** The `messages`
+map is generated through the same translator the `422` uses; a translator
+that throws costs that one field's messages — the client falls back to its
+own strings per rule — never the component, and never the document.
 
 ## Actions
 
@@ -477,24 +502,27 @@ because absence means a server predating repeater support and a client must
 never invent a capability the server did not declare; that rule only works
 while this server states the ordinary case explicitly.
 
-**Three things earn `readOnly: true`**, and the write path refuses on the
-same three predicates, so the published flag and the server's answer cannot
+**Two things earn `readOnly: true`**, and the write path refuses on the
+same two predicates, so the published flag and the server's answer cannot
 disagree:
 
-1. **A relationship repeater** (`->relationship()`). The gate fails
-   **closed**: `getRelationship()` throwing — or a component with no such
-   accessor at all — publishes `readOnly: true` with a warning, never an
-   editable control the write path would silently drop. Same shape as an
-   upload field's `accept`/`maxSize` gates.
-2. **A nested repeater** — a repeater inside another repeater's item
+1. **A nested repeater** — a repeater inside another repeater's item
    template. Two levels of row coordinate is a different problem, and a
    nested row's `422` comes back keyed `outer.0.inner.1.x`, which the client
    has no field to render it against.
-3. **A repeater whose item template holds a child that would not
+2. **A repeater whose item template holds a child that would not
    round-trip** — a `Hidden`, an unmapped component type, a `disabled()` or
    never-dehydrated field, a multiple-`file` field, or a **relation-write
    child whose `->dehydrated(true)` puts it back into the row's stored
    state**. See below; this is the one that would otherwise lose data.
+
+A **relationship repeater** (`->relationship()`) is **editable** — its rows
+write through Filament's own `saveRelationships()`, below — with one refusal
+carried over from when it was read-only: a relationship gate that cannot
+answer (`getRelationship()` throwing, or a component with no such accessor at
+all) still publishes `readOnly: true` with a warning, never an editable
+control the write path would silently drop. A gate that cannot answer never
+admits — same shape as an upload field's `accept`/`maxSize` gates.
 
 **A child that cannot round-trip refuses the whole repeater.** At top level,
 withholding a field's rule *protects* its column: the key never enters the
@@ -525,18 +553,33 @@ writable name, `config.readOnly: true`, and the stored rows stay readable on
 `GET`. `filament-mobile:doctor` names the offending child, which is the only
 place a panel author can learn *which* one cost them the control.
 
-**Only a JSON-column repeater is supported.** `Repeater::relationship()`
-writes child rows through Filament's own `saveRelationships()`, which this
-package's write path never calls — solving it here would mean solving the
-relation-manager problem twice, or badly. A relationship repeater's `/schema`
-node still appears, but with `config.readOnly: true`, and a submitted value
-for it is silently dropped on write, the same refusal a disabled field gets.
-`filament-mobile:doctor` reports it informationally, alongside three other
-shapes this slice legitimately does not support: a repeater containing a
-`live()` field (the item template is static — see below), a nested repeater
-(published `readOnly: true`; two levels of row coordinate is a different
-problem), and a repeater with a child that would not round-trip (named child
-and all).
+**A relationship repeater writes through Filament's own machinery.**
+`Repeater::relationship()` registers its own `saveRelationshipsUsing()`
+(`Repeater::saveToRelationship()`), and the write path's relation pass
+(`Write\RecordForm::saveRelations()`) reaches it unchanged — the same call
+Filament's own `CreateRecord`/`EditRecord` make after the attribute save,
+not new code. The caveat is row identity: a repeater's state on the wire is
+keyless, so every save is **delete-all-then-recreate** — Filament deletes
+the existing child rows and re-creates them from the submitted state. That
+is pinned in `RepeaterWriteTest`, and it matters for a panel whose child
+rows carry ids other tables point at, or timestamps anyone reads. The field
+still has no column of its own, so nothing reads one — but its **rows are in
+the record payload**, published off the relationship and projected onto the
+item template's declared fields, so the edit form prefills and a save that
+touched another field round-trips them unchanged. A child's `id`, timestamps
+and pivot columns stay off the wire, exactly as an undeclared column does
+anywhere else, and zero rows publish `[]` rather than nothing. The write path
+also refuses to read a present `null` as a clear; only an explicit `[]`
+clears. Both halves matter: while the rows were withheld from a field the
+schema published *writable*, a client had no value to send, submitted `null`,
+and every child row was deleted behind a `200`.
+`filament-mobile:doctor` no longer reports a resolvable
+relationship repeater at all; it still reports the shapes this slice
+legitimately does not support: a repeater containing a `live()` field (the
+item template is static — see below), a nested repeater (published
+`readOnly: true`; two levels of row coordinate is a different problem), a
+repeater with a child that would not round-trip (named child and all), and
+a relationship repeater whose gate cannot answer.
 
 **Per-item rules are published and enforced**, not merely published. A child
 component's own rules travel under `items.*.field` — `line_items.*.sku`,
@@ -555,6 +598,14 @@ verbatim behind a `200` — a shape neither the contract nor Filament's own web
 `Repeater` can read back, which the mobile client then rendered as zero rows
 and overwrote on the first Add. `list` turns that silent corruption into a
 `422`. An empty repeater is unaffected: `[]` is a list.
+
+**Remote options work inside a row.** A searchable relationship select in an
+item template publishes its `config.optionsUrl` like any other over-cap
+select, and `POST /{resource}/options` descends **through** a repeater into
+its item template to find the field (`OptionsController::findSelect()`) —
+the client renders a row's select off the template and asks for it by its
+bare child name, so a lookup that stopped at the repeater's border would 422
+a node the schema itself published.
 
 ### The name-space split — read this before touching `RuleExtractor`
 
@@ -601,9 +652,12 @@ no row reaches the database.
   re-settle that row — `/state` settles a flat form, and giving it a row
   coordinate is its own problem. `doctor` names a repeater containing a
   `live()` field so a panel author is not surprised.
-- **Relationship repeaters remain unusable this slice**, published read-only
-  and reported by `doctor` — honest, but a panel leaning on one gains nothing
-  yet.
+- **A relationship repeater's save is delete-all-then-recreate.** Keyless
+  state leaves Filament's `saveToRelationship()` no row to diff against, so
+  every save deletes the existing child rows and re-creates them from the
+  submitted state — pinned in `RepeaterWriteTest`. Fine for rows nothing
+  else references; a real consideration for child rows other tables point
+  at by id, or for `created_at` timestamps anyone reads.
 - **No nested repeaters.** A repeater inside a repeater's item template is
   published (the walker recurses into it like any other child) with
   `config.readOnly: true`, so the client renders it inert, and `doctor`
@@ -953,11 +1007,11 @@ The code was wired and dead.
 ## Relations
 
 A resource's `getRelations()` — the same relation managers a Filament panel
-already declares — becomes read-only, paginated child lists on mobile. **List
-only, this slice:** no create, edit, delete, attach or detach, and the
-manager's own filters, search and sorting are ignored — the list is served in
-relation order. Nothing is declared to opt this in; every relation manager a
-resource's `getRelations()` returns is introspected.
+already declares — becomes paginated child lists on mobile, **writable** when
+the related model resolves to exactly one registered resource (see Writes
+below). The manager's own filters, search and sorting are ignored — the list
+is served in relation order. Nothing is declared to opt this in; every
+relation manager a resource's `getRelations()` returns is introspected.
 
 ```
 GET /api/mobile-panel/{resource}/{record}/relations/{relation}
@@ -982,7 +1036,8 @@ for a resource with none, never an absent key:
   "key": "banners",
   "label": "Banners",
   "card": { "title": { "field": "name" }, "subtitle": { "field": "status" } },
-  "recordKey": "id"
+  "recordKey": "id",
+  "resource": "banners"
 }
 ```
 
@@ -1002,6 +1057,13 @@ for a resource with none, never an absent key:
   empty.
 - **`recordKey`** is the **related** model's own `getRouteKeyName()`, not the
   parent's — routinely a different model with a different key.
+- **`resource`** is the child **resource's** key, present only when exactly
+  one registered mobile resource owns the related model — zero owners or
+  several and the key is absent, and the relation is read-only. One
+  resolution drives both the key and the write endpoints' answer, so the
+  published schema and a `404` can never disagree about whether a relation
+  is writable. Absent means unavailable, the standing rule: a client must
+  not invent a write target the server did not declare.
 
 A relation the package refuses (see below) is **absent** from `relations`,
 not published disabled — the package's standing rule: absence means
@@ -1101,6 +1163,61 @@ A closure that returns something other than the `MobileCard` it was given —
 usually a block body missing its `return` — is refused by `relationCard()`
 itself, at declaration time.
 
+### Writes — a child row is created, updated and deleted through the parent
+
+```
+POST   /api/mobile-panel/{resource}/{record}/relations/{relation}
+PUT    /api/mobile-panel/{resource}/{record}/relations/{relation}/{child}
+DELETE /api/mobile-panel/{resource}/{record}/relations/{relation}/{child}
+```
+
+A relation offers these only where `/schema` published a `resource` key —
+one ambiguity answer (`ResourceRegistry::ownersOf()`: zero owners or several
+for the related model) drives both, so the schema and the endpoints cannot
+disagree. A write against a relation with no single owner, or one this
+package does not publish at all, is a **404, not a 403** — the same ruling
+the read path makes, for the same reason: a relation this API will never
+serve writes for does not exist as far as a client is concerned.
+
+- **The form is the child resource's own**, reused whole, and the write runs
+  the identical machinery `store()`/`update()` run — `SettledSchema`, the
+  rules as the mass-assignment whitelist, the panel's defaults under the
+  payload, the `TagSeparators` mirror, the relation pass — through
+  `src/Write/RecordForm.php`, the one home both controllers now share
+  (extracted from `MobilePanelController`; nothing about the resource
+  endpoints' behaviour changed).
+- **The gates are the parent's, then the child's.** Resolution applies every
+  gate the read endpoint applies (class `viewAny`, record `view`, the
+  relation gate under guard impersonation), then the child model's own
+  `create` (class-level — there is no child record yet), `update` or
+  `delete` (against the loaded child — authorization, not capability).
+- **Create goes through the relationship**
+  (`$record->{$relation}()->create(...)`), so the foreign key is the
+  parent's by construction — a row is never created floating and checked
+  for membership after the fact.
+- **`{child}` is the related model's own route key** — the published
+  `recordKey` — resolved *through the relationship*: a child id that exists
+  but belongs to a different parent is a 404, never a cross-parent write.
+- **Status codes are `201` / `200` / `200`.** Delete returns the deleted
+  row's serialized form, deliberately not the resource `destroy()`'s 204:
+  the relation client holds a *list* it must reconcile, and an empty answer
+  would force a re-fetch to learn what it just removed. The row is
+  serialized before the delete — afterwards, soft-deleted or gone
+  attributes cannot be trusted to read back the same.
+- **A validation failure is a `422` keyed by the child's own field names** —
+  the shape a top-level `PUT` already returns, so a client renders it with
+  no new parsing.
+- **Attach and detach are deliberately not exposed.** Pivot operations are a
+  different gesture with a different authorization question (which side's
+  policy answers `attach`?), and a relation list is not the UI for it. A
+  `BelongsToMany` relation here creates and deletes real child rows.
+
+`filament-mobile:doctor`'s Relations section names a **published** relation
+whose writes are off, distinguishing the two causes — no registered resource
+owns the child model, or several do — because the fixes differ (opt one in;
+the model is genuinely ambiguous). The relation reads fine either way, so
+this is reported informationally, not as a refusal.
+
 ### Known weaknesses, stated now
 
 - **A relation manager that narrows its query is invisible on mobile.** For
@@ -1127,7 +1244,10 @@ itself, at declaration time.
   practically wrong.
 - **Only the first two columns become a card.** A relation whose meaning
   lives in its third column looks empty of information.
-- **Nothing is writable.** No create, edit, delete, attach or detach.
+- **Attach and detach are not exposed.** Create, update and delete through
+  the relationship are; pivot operations are not — see the Writes section
+  above. A relation whose child model has no single owning resource stays
+  read-only, and `doctor` says which of the two causes applies.
 
 ## Rich text
 
@@ -1308,9 +1428,14 @@ model change fixes it:
   from this seam.
 - **`textAlign` is published and not honoured.** It belongs to the RTL/i18n
   slice.
-- **The conversion is uncached and runs per request** — the same caching gap
-  `RelationDiscovery::for()` already has, and the same pass will address
-  both.
+- **The conversion is memoised per request**, keyed by the raw string on the
+  `RecordSerializer` instance — one serializer per request, so the memo's
+  lifetime is the request's. Nulls are memoised too: a value whose conversion
+  degrades does not pay for its failure twice. The `RelationDiscovery::for()`
+  half of the caching pass this bullet used to promise was measured and
+  deliberately **not** done — the split already runs exactly once per
+  resource per request at every HTTP entry point, so there was no redundancy
+  left to remove.
 
 ## Dashboard
 
@@ -1550,7 +1675,10 @@ with each record on the detail endpoint, evaluated against the real model.
 ## `php artisan filament-mobile:doctor`
 
 Reports which resources are exposed, which components could not be walked,
-drift between `mobile()` and `table()`, and card paths that resolve to nothing.
+drift between `mobile()` and `table()`, card paths that resolve to nothing,
+relations it refuses (with the reason), and published relations whose rows
+are read-only because no single resource owns the child model —
+distinguishing zero owners from several, because the fixes differ.
 Exits non-zero on anything actionable, so CI can gate on it.
 
 **In a policy-guarded panel, pass `--user`.** By default `doctor` builds the
@@ -1593,7 +1721,8 @@ Measured against a real 35-resource production panel.
   §10.) A single-file `FileUpload` now walks as an editable field —
   see the Upload section above; only `FileUpload::multiple()` remains out of
   scope. `Repeater` now walks as an editable field too — see the Repeater
-  section above; only `Repeater::relationship()` remains out of scope.
+  section above; `Repeater::relationship()` writes through Filament's own
+  relation pass, at a delete-all-then-recreate cost per save.
   `RichEditor` now walks too — a `textarea` on the form always (see Rich
   text above), and `rich_entry` on the infolist where `->prose()` or the
   model's own `HasRichContent` says the column is rich. `Radio`, `TagsInput`

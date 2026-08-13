@@ -37,8 +37,14 @@ final class SettledSchema
      * more writable names than it. Kept as a named constant rather than
      * inlined so the derivation below and the parameter default cannot drift
      * apart.
+     *
+     * Untyped deliberately: a typed constant is PHP 8.3, this package declares
+     * `php: ^8.2`, and a parse error is not a degradation — the whole file
+     * fails to load, so nothing in the write path runs at all. The 8.2 matrix
+     * job would have said so on the day it landed had `vendor/bin/pest` been
+     * able to start.
      */
-    private const int DEFAULT_MAX_PASSES = 32;
+    private const DEFAULT_MAX_PASSES = 32;
 
     /**
      * @param  array<string, mixed>  $state

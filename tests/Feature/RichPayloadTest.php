@@ -207,3 +207,69 @@ it('never derives a sibling from a column the payload does not already carry', f
     expect($row)->not->toHaveKey('body_html')
         ->and($row)->not->toHaveKey('body_html.__rich');
 });
+
+
+it('converts a repeated rich value once per serializer, not once per row', function () {
+    // The caching pass, measured before it was written: a 10-row index page
+    // holding ONE body_html value ran 10 TipTap conversions, and a show()
+    // with two rich columns sharing one string ran 2. index() serialises the
+    // whole page through ONE RecordSerializer, so the memo lives there.
+    $serializer = (new RecordSerializer((new MobileCard())->title('name'), 'id'))
+        ->withInfolistPaths(['body_html'])
+        ->withRichPaths(['body_html']);
+
+    $sameA = seedBannerWith(['name' => 'A', 'body_html' => RICH_BODY]);
+    $sameB = seedBannerWith(['name' => 'B', 'body_html' => RICH_BODY]);
+    $other = seedBannerWith(['name' => 'C', 'body_html' => '<p>Other</p>']);
+
+    // Behaviour first: every row still gets its sibling, memo or not.
+    foreach ([$sameA, $sameB, $other] as $banner) {
+        expect($serializer->serialize($banner)['body_html.__rich']['text'] ?? null)
+            ->not->toBeNull();
+    }
+
+    // Two distinct values, two memo entries — the repeated value converted
+    // once. Keyed by the raw value itself, so a second rich COLUMN holding
+    // RICH_BODY would still be one entry (see RecordSerializer::$richEnvelopes).
+    expect((new ReflectionProperty($serializer, 'richEnvelopes'))->getValue($serializer))
+        ->toHaveCount(2);
+});
+
+it('memoises a degraded conversion too, so a bad value does not re-throw per row', function () {
+    // '123' takes envelopeFor()'s JSON branch and throws inside it (pinned in
+    // RichContentTest) — the catch degrades to null. A page of such rows must
+    // pay that throwing path once, not per row.
+    $serializer = (new RecordSerializer((new MobileCard())->title('name'), 'id'))
+        ->withInfolistPaths(['body_html'])
+        ->withRichPaths(['body_html']);
+
+    $a = seedBannerWith(['name' => 'A', 'body_html' => '123']);
+    $b = seedBannerWith(['name' => 'B', 'body_html' => '123']);
+
+    expect($serializer->serialize($a))->not->toHaveKey('body_html.__rich')
+        ->and($serializer->serialize($b))->not->toHaveKey('body_html.__rich');
+
+    expect((new ReflectionProperty($serializer, 'richEnvelopes'))->getValue($serializer))
+        ->toBe(['123' => null]);
+});
+
+it('shares no memo across serializers — the next request converts for itself', function () {
+    // The memo is instance state BECAUSE every endpoint builds its serializer
+    // per request: a static would be the worker-lifetime (Octane, Swoole)
+    // question HeadlessTableHost documents this package never asking. A fresh
+    // serializer — the next request's — starts empty and converts again, so
+    // nothing can leak across the boundary.
+    $make = fn (): RecordSerializer => (new RecordSerializer((new MobileCard())->title('name'), 'id'))
+        ->withInfolistPaths(['body_html'])
+        ->withRichPaths(['body_html']);
+
+    $banner = seedBannerWith(['name' => 'Sale', 'body_html' => RICH_BODY]);
+
+    $first = $make();
+    $first->serialize($banner);
+
+    $second = $make();
+
+    expect((new ReflectionProperty($second, 'richEnvelopes'))->getValue($second))->toBe([])
+        ->and($second->serialize($banner)['body_html.__rich']['text'])->toBe(RICH_TEXT);
+});

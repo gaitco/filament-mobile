@@ -172,13 +172,26 @@ final class PanelSchemaBuilder
         // "no card ⇒ no relation", both testing nullness, both waving through
         // the empty-but-non-null card `relationCard('key', fn ($c) => $c)`
         // builds. Discovery decides once, and its refusal reaches `doctor`.
-        foreach (RelationDiscovery::for($class, $mobile) as $relation) {
-            $blocks[] = [
+        foreach (RelationDiscovery::for($class, $mobile, $this->registry) as $relation) {
+            $block = [
                 'key' => $relation['key'],
                 'label' => $relation['label'],
                 'card' => $relation['card']->toArray(),
                 'recordKey' => $this->recordKeyFor($model, $relation['key']),
             ];
+
+            // P9: the child resource's key, present only when discovery
+            // resolved EXACTLY ONE mobile resource for the child model — the
+            // same value the write endpoints 404 on, so the document and the
+            // endpoints cannot disagree. Absent (zero or several matches)
+            // means read-only on this API, and an absent key on an old server
+            // reads the same way: a client never invents a capability the
+            // server did not declare.
+            if ($relation['resource'] !== null) {
+                $block['resource'] = $this->registry->keyFor($relation['resource']);
+            }
+
+            $blocks[] = $block;
         }
 
         return $blocks;

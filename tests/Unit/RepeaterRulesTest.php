@@ -9,6 +9,8 @@ use Filament\Forms\Components\MarkdownEditor;
 use Filament\Forms\Components\Repeater;
 use Filament\Forms\Components\TextInput;
 use Filament\Schemas\Components\Section;
+use Filament\Schemas\Schema;
+use Gait\FilamentMobile\Tests\Fixtures\Models\Banner;
 use Illuminate\Support\Arr;
 use Gait\FilamentMobile\Introspection\ChildComponents;
 use Gait\FilamentMobile\Validation\RuleExtractor;
@@ -93,18 +95,30 @@ it('lets a repeater inside a disabled section contribute no rule and no writable
         ->and(WritableNames::of($components))->toBe([]);
 });
 
-it('lets a relationship repeater contribute no writable name', function () {
-    // Assertion 6. Repeater::relationship() calls dehydrated(false) — the
-    // same literal-refusal mechanism a singular-relationship container
-    // (Section::relationship()) already relies on — so the gate that runs
-    // before the recursion already excludes it, and it never contributes
-    // rules or a writable name.
-    $components = [
-        Repeater::make('tag_rows')->relationship('tags')->schema([TextInput::make('name')]),
-    ];
+it('names a relationship repeater as ONE writable name with NO rule — the relation pass, never a column, saves it (P9)', function () {
+    // Assertion 6, inverted by P9. Before, `Repeater::relationship()`'s
+    // literal `dehydrated(false)` was all that kept the field out of the
+    // write path, so it contributed nothing at all. Since the relation pass
+    // saves its rows through Filament's own saveRelationships(), it now
+    // contributes exactly what a multi-valued relationship select does: its
+    // whole-array name in WritableNames (so the settle keeps the submitted
+    // rows for the relation pass), its component in relationWriteComponents,
+    // and NO rule — a rule would put the name into the validated payload,
+    // where update() would write it as a column that does not exist.
+    // Wired into a real schema, because the classification asks
+    // getRelationship() — which only a schema-mounted component can answer
+    // (an unwired one throws, and the write path fails closed on that, as
+    // the pre-P9 behaviour also did). Same idiom RepeaterSchemaTest uses.
+    $components = Schema::make(null)
+        ->model(Banner::class)
+        ->components([
+            Repeater::make('tag_rows')->relationship('tags')->schema([TextInput::make('name')]),
+        ])
+        ->getComponents();
 
-    expect(WritableNames::of($components))->toBe([])
-        ->and(RuleExtractor::fromComponents($components))->toBe([]);
+    expect(WritableNames::of($components))->toBe(['tag_rows'])
+        ->and(RuleExtractor::fromComponents($components))->toBe([])
+        ->and(RuleExtractor::relationWriteComponents($components))->toHaveKey('tag_rows');
 });
 
 it('never lets a relation-write field nested inside a repeater carry a starred name into WritableNames', function () {
@@ -249,32 +263,34 @@ it('answers null for a template every child of which round-trips', function () {
 });
 
 /**
- * P6c close-out, Finding 5. `Repeater::relationship()` calls
+ * P6c close-out, Finding 5 — landed in P9. `Repeater::relationship()` calls
  * `dehydrated(false)` as a literal, and that literal was the ONLY thing
  * keeping a relationship repeater out of the write path —
- * `FieldPersistence::savesViaRelationship()` misclassifies it as singular
+ * `FieldPersistence::savesViaRelationship()` misclassified it as singular
  * (no `isMultiple()`), so `->dehydrated(true)` put its name in the
  * mass-assignment whitelist while `SchemaWalker` published the same node
  * `readOnly: true`. A crafted payload then reached `update()` as a column
  * that does not exist: `QueryException`, i.e. a 500 on crafted input.
  *
- * Fixed narrowly, at the repeater branch rather than in
- * `savesViaRelationship()` itself: reclassifying there would flip
- * `neverPersists()` for every relationship repeater, changing what /schema
- * publishes and routing its rows into the controller's relation pass — a
- * far wider change than the disagreement warrants. The deliberate
- * `Repeater`-aware branch stays deferred (ledger, HANDOFF).
+ * P9's deliberate `Repeater`-aware branch in `savesViaRelationship()` is the
+ * fix the finding deferred: a relationship repeater is now a relation-write
+ * leaf WHATEVER its dehydration says, so `dehydrated(true)` can no longer
+ * route it into a column write — it gets no rule (never in the validated
+ * payload) and its writable name belongs to the relation pass.
  */
-it('refuses a relationship repeater even when dehydrated(true) overrides the literal', function () {
-    $components = [
-        Repeater::make('forced')
-            ->relationship('tags')
-            ->schema([TextInput::make('name')])
-            ->dehydrated(true),
-    ];
+it('never lets a relationship repeater become a column write, even with dehydrated(true)', function () {
+    $components = Schema::make(null)
+        ->model(Banner::class)
+        ->components([
+            Repeater::make('forced')
+                ->relationship('tags')
+                ->schema([TextInput::make('name')])
+                ->dehydrated(true),
+        ])
+        ->getComponents();
 
     expect(RuleExtractor::fromComponents($components))->toBe([])
-        ->and(WritableNames::of($components))->toBe([]);
+        ->and(WritableNames::of($components))->toBe(['forced']);
 });
 
 /**

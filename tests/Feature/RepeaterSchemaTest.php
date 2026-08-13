@@ -55,12 +55,21 @@ it('publishes an explicit readOnly: false for an ordinary repeater', function ()
         ->and($node['config']['readOnly'])->toBeFalse();
 });
 
-it('publishes a relationship repeater readOnly, refused this slice', function () {
+it('publishes a relationship repeater editable, writable through the relation pass (P9)', function () {
+    // P9 inverted this node's answer. Before, a relationship repeater was
+    // published `readOnly: true` (plus `disabled`/`writable: false` through
+    // the singular misread in savesViaRelationship()) because the write path
+    // never called saveRelationships(); since the relation pass does, the
+    // field publishes exactly like an ordinary writable repeater — readOnly
+    // present and false, no `writable` key, not disabled.
     $node = findFormNode(schemaFor('banners'), 'tag_rows');
 
     expect($node)->not->toBeNull()
         ->and($node['type'])->toBe('repeater')
-        ->and($node['config']['readOnly'])->toBeTrue();
+        ->and($node['config'])->toHaveKey('readOnly')
+        ->and($node['config']['readOnly'])->toBeFalse()
+        ->and($node['disabled'])->toBeFalse()
+        ->and($node)->not->toHaveKey('writable');
 });
 
 /**

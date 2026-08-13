@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Gait\FilamentMobile\Tests\Fixtures\Resources;
 
+use Filament\Forms\Components\Repeater;
+use Filament\Forms\Components\TextInput;
 use Filament\Infolists\Components\TextEntry;
 use Filament\Resources\Resource;
 use Filament\Schemas\Components\Section;
@@ -57,6 +59,23 @@ class RichResource extends Resource
                 ->title('name')
                 ->subtitle('body_html')
                 ->meta('prose_note'));
+    }
+
+    /**
+     * A3: a JSON-column repeater on the RECORD payload golden. Until this
+     * form existed the golden's `data` carried scalars and rich siblings
+     * only — a repeater's stored rows are the one record-payload shape left
+     * that no golden pinned.
+     */
+    public static function form(Schema $schema): Schema
+    {
+        return $schema->components([
+            TextInput::make('name')->required(),
+            Repeater::make('line_items')->schema([
+                TextInput::make('sku')->required(),
+                TextInput::make('qty')->numeric(),
+            ]),
+        ]);
     }
 
     public static function infolist(Schema $schema): Schema

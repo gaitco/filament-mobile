@@ -49,6 +49,15 @@ Route::prefix(config('filament-mobile.prefix'))
         // it has no actual competitor at this segment count.
         Route::get('{resource}/{record}/relations/{relation}', RelationController::class)
             ->name('relations');
+        // P9: relation row writes. Same segment-count reasoning as the GET
+        // above — nothing else registered matches a four- or five-segment
+        // shape, so ordering here is for the reader, not the matcher.
+        Route::post('{resource}/{record}/relations/{relation}', [RelationController::class, 'store'])
+            ->name('relations.store');
+        Route::put('{resource}/{record}/relations/{relation}/{child}', [RelationController::class, 'update'])
+            ->name('relations.update');
+        Route::delete('{resource}/{record}/relations/{relation}/{child}', [RelationController::class, 'destroy'])
+            ->name('relations.destroy');
         Route::get('{resource}/{record}', [MobilePanelController::class, 'show'])->name('show');
         Route::put('{resource}/{record}', [MobilePanelController::class, 'update'])->name('update');
         Route::delete('{resource}/{record}', [MobilePanelController::class, 'destroy'])->name('destroy');

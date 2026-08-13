@@ -25,6 +25,9 @@ final class RecordSerializer
     /** @var list<string> */
     private array $formPaths = [];
 
+    /** @var array<string, list<array<string, mixed>>> */
+    private array $repeaterRows = [];
+
     /** @var list<string> */
     private array $richPaths = [];
 
@@ -36,6 +39,36 @@ final class RecordSerializer
      * @var array<string, string>|null
      */
     private ?array $tagSeparators = null;
+
+    /**
+     * Rich-text envelopes this instance has already produced, keyed by the
+     * raw column value itself: one TipTap conversion per distinct value per
+     * serializer, never one per row.
+     *
+     * `index()` serialises a whole page through ONE serializer (the same
+     * property `$tagSeparators` above exists for), and a shared or defaulted
+     * rich column — one body stamped onto every row — otherwise pays the
+     * full parse per row: measured 10 conversions for a 10-row page holding
+     * a single value, 1 after. `show()` gains the same way when two rich
+     * columns hold one string (2 measured, 1 after).
+     *
+     * An instance property, not a static: every endpoint builds its
+     * serializer per request, so the memo's lifetime IS the request and the
+     * worker-lifetime static question (Octane, Swoole) never has to be
+     * answered — the same ruling `HeadlessTableHost` makes for its host.
+     *
+     * The key is the raw string, not a hash of it: a hash collision here
+     * would publish one value's document under another's — a wrong answer,
+     * not a slow one — and PHP hashes string keys internally anyway. The
+     * column name is deliberately NOT part of the key: `envelopeFor()` is a
+     * pure function of the raw string, so two columns holding one value are
+     * one conversion, and naming the column would only split that entry.
+     * Null results are memoised too — a value whose conversion degrades (see
+     * RichContent) must not re-run its throwing path for every row of a page.
+     *
+     * @var array<string, array{doc: array<string, mixed>, text: string}|null>
+     */
+    private array $richEnvelopes = [];
 
     /**
      * @param  class-string|null  $resourceClass  the resource whose form owns
@@ -97,6 +130,26 @@ final class RecordSerializer
     }
 
     /**
+     * A relationship repeater's rows, already read and PROJECTED onto the item
+     * template's fields by the caller (see
+     * MobilePanelController::repeaterRelationRows()).
+     *
+     * Handed in rather than read here, because this class reads attributes off
+     * a record and these are child records off a relationship — a different
+     * question, needing the form components to know which fields may travel.
+     * Absent means the field opens empty; `[]` means it genuinely has no rows.
+     *
+     * @param  array<string, list<array<string, mixed>>>  $rows
+     */
+    public function withRepeaterRows(array $rows): self
+    {
+        $clone = clone $this;
+        $clone->repeaterRows = $rows;
+
+        return $clone;
+    }
+
+    /**
      * Rich-text paths the SCHEMA declared — the infolist entries the walker
      * refined to `rich_entry` because `->prose()` was set on them.
      *
@@ -147,6 +200,15 @@ final class RecordSerializer
             $payload[$path] = $this->read($record, $path);
         }
 
+        // Flat, and after the form pass, for the same reason `caption.ar` is:
+        // a relationship repeater's name is a form field's name, and its rows
+        // are what the edit screen seeds that field from. Never through
+        // read() — there is no attribute to read; the rows arrived already
+        // projected, off the relationship.
+        foreach ($this->repeaterRows as $name => $rows) {
+            $payload[$name] = $rows;
+        }
+
         // LAST, and flat, exactly like a translatable's `caption.ar`. Three
         // consumers want three shapes of one rich column — the card wants
         // plain text, the infolist wants the document, the form wants the raw
@@ -168,7 +230,7 @@ final class RecordSerializer
         // and every consumer falls back to the raw string it already has.
         foreach ($this->richPathsFor($record) as $path) {
             $raw = Arr::get($payload, $path);
-            $envelope = is_string($raw) ? RichContent::envelopeFor($raw) : null;
+            $envelope = is_string($raw) ? $this->richEnvelope($raw) : null;
 
             if ($envelope === null) {
                 continue;
@@ -201,6 +263,23 @@ final class RecordSerializer
         return $this->tagSeparators ??= $this->resourceClass === null
             ? []
             : TagSeparators::forResource($this->resourceClass);
+    }
+
+    /**
+     * `RichContent::envelopeFor()` through this instance's memo — see
+     * `$richEnvelopes` for why the cache lives here and is keyed the way it
+     * is. `array_key_exists`, not `??=`: a memoised null (a value whose
+     * conversion degraded) must be returned, not recomputed.
+     *
+     * @return array{doc: array<string, mixed>, text: string}|null
+     */
+    private function richEnvelope(string $raw): ?array
+    {
+        if (! array_key_exists($raw, $this->richEnvelopes)) {
+            $this->richEnvelopes[$raw] = RichContent::envelopeFor($raw);
+        }
+
+        return $this->richEnvelopes[$raw];
     }
 
     /**

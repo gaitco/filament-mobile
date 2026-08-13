@@ -78,7 +78,15 @@ it('persists an unseparated tags field as an array, untouched, on update', funct
         // Raw too: a mirror that fired here would store `"a,b"` under a json
         // column, and the array cast would decode nothing while the accessor
         // assertion above could still be argued around.
-        ->and($banner->fresh()->getRawOriginal('labels'))->toBe('["a","b"]');
+        //
+        // DECODED, not compared byte-for-byte: MySQL's json type re-serialises
+        // what it stores and puts a space after each comma (`["a", "b"]`),
+        // so the literal string pinned SQLite's formatting rather than the
+        // claim. The claim is "a JSON array landed here, not a delimited
+        // string", and decoding tests exactly that on either driver — a
+        // stored `"a,b"` decodes to the string `'a,b'` and still fails.
+        ->and(json_decode($banner->fresh()->getRawOriginal('labels'), true))
+        ->toBe(['a', 'b']);
 });
 
 it('persists an unseparated tags field as an array, untouched, on create', function () {

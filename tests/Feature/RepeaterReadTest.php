@@ -27,7 +27,8 @@ it('returns a repeater column\'s stored rows in the record payload', function ()
 
     expect($data)->toHaveKey('line_items')
         ->and($data['line_items'])->toBeArray()
-        ->and($data['line_items'])->toBe($rows);
+        // keySorted: MySQL's json type returns object keys sorted (see Pest.php).
+        ->and(keySorted($data['line_items']))->toBe(keySorted($rows));
 });
 
 it('returns a disabled repeater\'s stored rows too — disabled means not writable, not absent', function () {
@@ -67,11 +68,21 @@ it('answers a null repeater column the same way every other null column is answe
         ->and($data['line_items'])->toBeNull();
 });
 
-it('never publishes a relationship repeater\'s column — it is read-only and has none', function () {
-    // Assertion 3. `tag_rows` is `Repeater::relationship('tags')`: it writes
-    // child rows through Filament's own saveRelationships(), which this
-    // package's write path never calls (RepeaterWriteTest), and it has no
-    // column of its own for the read path to surface either.
+it('publishes a relationship repeater\'s rows off the relationship, never as a column', function () {
+    // Assertion 3, INVERTED — and the inversion is a bug fix, not a change of
+    // mind. `tag_rows` is `Repeater::relationship('tags')`: it has no column,
+    // so the attribute pass must still not read one (data_get() would resolve
+    // the RELATION and publish whole child models past the card's whitelist).
+    // But withholding the key entirely, once P9 made the field WRITABLE, is
+    // what destroyed data: the client seeded the field to null, submitted that
+    // null, and the write path read it as "clear every row". So the rows are
+    // published by a pass of their own — off the relationship, projected onto
+    // the item template's fields — and the attribute pass still skips the
+    // name. See MobilePanelController::repeaterRelationRows() and the null
+    // case in RepeaterWriteTest.
+    //
+    // Zero rows publish `[]`, not absence: "no rows" is a real answer, and a
+    // client that could not tell it from "unknown" is back to guessing.
     $banner = seedBanner();
 
     $data = test()->actingAs(makeUser('admin'))
@@ -79,7 +90,8 @@ it('never publishes a relationship repeater\'s column — it is read-only and ha
         ->assertOk()
         ->json('data');
 
-    expect($data)->not->toHaveKey('tag_rows');
+    expect($data)->toHaveKey('tag_rows')
+        ->and($data['tag_rows'])->toBe([]);
 });
 
 it('closes the round trip: GET the rows, PUT them back unchanged, GET again, identical', function () {
@@ -95,7 +107,7 @@ it('closes the round trip: GET the rows, PUT them back unchanged, GET again, ide
         ->assertOk()
         ->json('data');
 
-    expect($first['line_items'])->toBe($rows);
+    expect(keySorted($first['line_items']))->toBe(keySorted($rows));
 
     test()->actingAs($user)
         ->putJson("/api/mobile-panel/banners/{$banner->id}", [
@@ -110,5 +122,5 @@ it('closes the round trip: GET the rows, PUT them back unchanged, GET again, ide
         ->assertOk()
         ->json('data');
 
-    expect($second['line_items'])->toBe($rows);
+    expect(keySorted($second['line_items']))->toBe(keySorted($rows));
 });

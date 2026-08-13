@@ -115,8 +115,8 @@ return new class extends Migration
             // `['c','b','c']` — PHP merges lists by index.
             $table->json('plain_multi')->nullable();
             // P6c: the JSON-column repeaters. `tag_rows` needs no column — it
-            // is a relationship repeater, never written by this package's
-            // write path.
+            // is a relationship repeater, written through the relation pass
+            // (P9), never as an attribute.
             $table->json('line_items')->nullable();
             $table->json('fixed_rows')->nullable();
             $table->json('exploding_repeater')->nullable();
@@ -162,14 +162,21 @@ return new class extends Migration
             $table->json('restricted_meta')->nullable();
             $table->json('restricted_meta_2')->nullable();
             $table->json('exploding_meta')->nullable();
+            // A6: the three columns behind RuledBannerResource's url/regex/
+            // confirmed fields — the rules the write path never re-derived
+            // until this slice. `access_token_confirmation` needs no column:
+            // the fixture field is dehydrated(false), Filament's own
+            // confirmation idiom, so nothing ever writes it.
+            $table->string('website')->nullable();
+            $table->string('handle')->nullable();
+            $table->string('access_token')->nullable();
             $table->timestamp('deleted_at')->nullable();
             $table->timestamps();
         });
 
-        // Minimal: exists so `tag_ids` on BannerResource's form resolves a
-        // real BelongsToMany. Nothing here ever writes a pivot row — the
-        // write path never calls saveRelationships() — so this fixture is
-        // introspected, not exercised.
+        // Exists so `tag_ids` and `tag_rows` on BannerResource's form resolve
+        // a real BelongsToMany — both are written through the relation pass
+        // (P3b and P9 respectively), so pivot rows land here.
         Schema::create('tags', function (Blueprint $table): void {
             $table->id();
             $table->string('name');

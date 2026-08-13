@@ -368,10 +368,9 @@ class BannerResource extends Resource
                         ),
                     )
                     ->searchable(),
-                // The write path never calls saveRelationships(), so this
-                // returns 201/200 having attached nothing. Publishing it
-                // editable invites a user to fill a control whose contents
-                // are silently discarded — see FieldPersistence.
+                // Saved by the relation pass (P3b): saveRelationships()
+                // syncs the pivot after the attribute save, so this publishes
+                // editable and attaches what it reports. See RelationWriteTest.
                 Select::make('tag_ids')
                     ->multiple()
                     ->relationship('tags', 'name'),
@@ -641,8 +640,13 @@ class BannerResource extends Resource
                 ->schema([TextInput::make('note')])
                 ->addable(false)
                 ->deletable(false),
-            // A relationship repeater writes child rows — out of scope this
-            // slice, so it must publish readOnly and be refused.
+            // P9: a relationship repeater — its rows are child records the
+            // relation pass writes through Filament's own
+            // Repeater::saveToRelationship(), so it publishes editable and
+            // saves. It has no column, so the read path leaves it absent
+            // (RepeaterReadTest), and a save that names it replaces the rows
+            // wholesale — the wire carries no `record-{id}` state keys
+            // (RepeaterWriteTest pins both).
             Repeater::make('tag_rows')
                 ->relationship('tags')
                 ->schema([TextInput::make('name')]),
