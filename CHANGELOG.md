@@ -1,5 +1,26 @@
 # Changelog
 
+## Unreleased
+
+- **The PHP floor is now `^8.4`, up from `^8.2`.** A **breaking** requirement
+  change: `composer require` refuses on 8.2 and 8.3 rather than installing
+  something that may not parse. Filament itself still allows `^8.2`, so this is
+  this package's own floor, not one inherited.
+
+  The reason is that the old floor was never actually held. A feature above the
+  floor is a **parse error**, not a degradation — the file does not load, so
+  nothing in it runs — and a typed constant (`const int`, PHP 8.3) shipped
+  against the `^8.2` promise in v0.3.0, v0.4.0 and v0.5.0. It was invisible
+  because the only PHP on the machine this is developed on is 8.4, and the
+  matrix job that would have caught it could not start (see 0.6.1's CI note).
+  Raising the floor to match the development version removes the gap rather
+  than promising to watch it: the version you develop on is the version you
+  promise. The CI matrix runs 8.4 only, and `scripts/lint-php-floor.sh` reads
+  the floor out of `composer.json` so the two cannot drift.
+
+  If you need 8.2 or 8.3, pin `gait/filament-mobile:^0.6.1` — that line is
+  unaffected and its own floor stays `^8.2`.
+
 ## 0.6.1 — 2026-08-13
 
 - **A relation a create cannot link is no longer published writable.**

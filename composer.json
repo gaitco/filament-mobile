@@ -12,7 +12,7 @@
         { "name": "Abdullah Ghanem", "email": "info@gaitco.com" }
     ],
     "require": {
-        "php": "^8.2",
+        "php": "^8.4",
         "filament/filament": "^4.0|^5.0",
         "illuminate/support": "^12.0"
     },

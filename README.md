@@ -31,6 +31,12 @@ a client is shown and the rules the server enforces cannot drift apart.
 
 ## Install
 
+**Requires PHP 8.4+**, Laravel 12 and Filament 4 or 5. The PHP floor is this
+package's own — Filament itself allows 8.2 — and it is deliberately the version
+this package is developed on, because a feature above the floor is a parse error
+rather than a degradation and the old `^8.2` promise had already been broken
+without anyone noticing. On PHP 8.2 or 8.3, pin `^0.6.1`.
+
 ```bash
 composer require gait/filament-mobile
 php artisan vendor:publish --tag=filament-mobile-config
