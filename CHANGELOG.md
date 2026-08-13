@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.6.1 — 2026-08-13
+
+- **A relation a create cannot link is no longer published writable.**
+  `store()` creates THROUGH the relationship so the foreign key is the
+  parent's by construction — but that only holds for the types whose
+  `create()` actually links: `HasOne`/`HasMany`/`MorphOne`/`MorphMany` (via
+  `HasOneOrMany`) and `BelongsToMany`/`MorphToMany`. Discovery published any
+  `Relation` subtype, so a `BelongsTo`, `MorphTo`, `HasManyThrough` or
+  `HasOneThrough` relation manager whose child model had exactly one mobile
+  resource was published writable, and `Relation::__call` then forwarded
+  `create()` to the query builder: a `201` for a row created **unrelated to
+  the parent**, which the client's own refresh would not then find. A
+  `HasManyThrough` reaches past its intermediate table; a `BelongsTo`'s verb is
+  `associate()`, which writes the PARENT, not a child.
+
+  The `resource` key is withheld for those types, so all three write endpoints
+  `404` on the read path's own ruling, and the READ path is untouched —
+  reading a `BelongsTo` relation stays perfectly available. Decided in
+  `RelationDiscovery`, not the controller, so the published capability and the
+  endpoint cannot disagree; `doctor` reports the relation TYPE as the reason
+  **before** the owner-count one, because naming a missing resource would send
+  the author looking for something that already exists.
+
 ## 0.6.0 — 2026-08-13
 
 - **Relation writes.** A published relation is no longer read-only by

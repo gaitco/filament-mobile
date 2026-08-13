@@ -685,6 +685,22 @@ final class DoctorCommand extends Command
                     continue;
                 }
 
+                // Reported before the owner count, because it is a different
+                // fault with a different fix: the child model may well be
+                // served by exactly one resource: it is the relation TYPE that
+                // cannot carry a create. Naming the owner count here would
+                // send the author looking for a resource that already exists.
+                if (! $relation['createsLinked']) {
+                    $lines[] = class_basename($class) . '.' . $relation['key']
+                        . ': rows are read-only — a create through this relation type would not link the'
+                        . ' new row to the parent (only HasOne/HasMany/MorphOne/MorphMany and'
+                        . ' BelongsToMany/MorphToMany can), so the write endpoints 404. A'
+                        . ' HasManyThrough or HasOneThrough reaches past its intermediate table, and a'
+                        . ' BelongsTo/MorphTo would write the PARENT, not a child';
+
+                    continue;
+                }
+
                 $count = count($registry->ownersOf($relation['related']));
                 $why = $count === 0
                     ? 'no mobile resource serves it'

@@ -10,6 +10,8 @@ use Gait\FilamentMobile\MobileResource;
 use Gait\FilamentMobile\RelationCard;
 use Gait\FilamentMobile\ResourceRegistry;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsToMany;
+use Illuminate\Database\Eloquent\Relations\HasOneOrMany;
 use Illuminate\Database\Eloquent\Relations\Relation;
 use ReflectionMethod;
 use Throwable;
@@ -108,6 +110,24 @@ final class RelationDiscovery
             // side simply stays unpublished.
             $relatedClass = null;
 
+            // Whether creating THROUGH this relationship links the new row to
+            // the parent. Only `HasOneOrMany` and `BelongsToMany` (and so
+            // `MorphOneOrMany`/`MorphToMany`, which extend them) set the
+            // foreign key or write the pivot in `create()`. Every other
+            // subtype has no `create()` of its own, so `Relation::__call`
+            // forwards to the query builder and the row is created
+            // UNRELATED: `HasManyThrough` and `HasOneThrough` reach past the
+            // intermediate table, `BelongsTo`/`MorphTo` point the other way
+            // entirely (`associate()` is their verb, and it writes the
+            // PARENT). The endpoint would have answered `201` with a row that
+            // is not in the relation, and the client's refresh would then not
+            // find it.
+            //
+            // Discovery decides it, not the controller, so the published
+            // capability and the endpoint cannot disagree — the same single
+            // resolution `resource` itself follows.
+            $createsLinked = false;
+
             // On the resource's own model, not on an owner record: BUILDING a
             // relationship never queries, so an unsaved instance answers the
             // only question there is here — does this name resolve at all.
@@ -137,6 +157,8 @@ final class RelationDiscovery
                 }
 
                 $relatedClass = $resolved->getRelated()::class;
+                $createsLinked = $resolved instanceof HasOneOrMany
+                    || $resolved instanceof BelongsToMany;
             }
 
             try {
@@ -184,12 +206,17 @@ final class RelationDiscovery
                 'card' => $card,
                 // The write capability (P9): exactly one mobile resource
                 // serving the child model means the relation's rows have a
-                // form to write against. Null — zero or several — keeps the
-                // `resource` key off /schema and the write endpoints 404:
-                // absence means unavailable, and guessing between two forms
-                // would write one at random.
+                // form to write against, AND the relationship has to be one a
+                // create can go through (see $createsLinked). Null — zero
+                // owners, several, or a relation type that would create the
+                // row unlinked — keeps the `resource` key off /schema and the
+                // write endpoints 404: absence means unavailable, and
+                // guessing between two forms would write one at random.
                 'related' => $relatedClass,
-                'resource' => $relatedClass === null ? null : $registry->findByModel($relatedClass),
+                'createsLinked' => $createsLinked,
+                'resource' => $relatedClass === null || ! $createsLinked
+                    ? null
+                    : $registry->findByModel($relatedClass),
             ];
         }
 
