@@ -27,6 +27,10 @@ a client is shown and the rules the server enforces cannot drift apart.
 
 ![How it works](https://raw.githubusercontent.com/gaitco/filament-mobile/main/art/diagram.png)
 
+And this is what the panel becomes — the client's stock screens, driven entirely by what this package publishes:
+
+![The screens](https://raw.githubusercontent.com/gaitco/filament-mobile/main/art/showcase.png)
+
 ---
 
 ## Install
@@ -199,6 +203,8 @@ Everything below is reference. Read the section for the feature you are wiring;
 each ends with a **Known weaknesses** list stating plainly what it does not do.
 
 ## Supported form inputs
+
+![Form field types](https://raw.githubusercontent.com/gaitco/filament-mobile/main/art/inputs.png)
 
 The one table to check before pointing this at a panel. **A field whose
 component is not here is dropped** — the walker reports it as
@@ -1011,6 +1017,8 @@ The code was wired and dead.
   claim its date pickers are complete.
 
 ## Relations
+
+![Relation writes](https://raw.githubusercontent.com/gaitco/filament-mobile/main/art/relations.png)
 
 A resource's `getRelations()` — the same relation managers a Filament panel
 already declares — becomes paginated child lists on mobile, **writable** when
