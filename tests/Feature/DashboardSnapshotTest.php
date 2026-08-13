@@ -9,7 +9,6 @@ use Gait\FilamentMobile\Tests\Fixtures\Widgets\RevenueChartWidget;
 // does for /schema: this is what the real endpoint actually emits for the
 // real fixture widgets, read by Task 6's Dart contract test. Regenerate with
 // UPDATE_SNAPSHOTS=1.
-const DASHBOARD_SNAPSHOT = __DIR__ . '/../../../../contract/dashboard.json';
 
 // Same reset DashboardEndpointTest and SchemaEndpointTest carry, for the same
 // reason: the production env-flip below never flips back on its own, and
@@ -48,9 +47,9 @@ it('matches the committed dashboard contract snapshot', function () {
     ) . "\n";
 
     if (getenv('UPDATE_SNAPSHOTS') === '1') {
-        file_put_contents(DASHBOARD_SNAPSHOT, $json);
+        file_put_contents(contractPath('dashboard.json'), $json);
     }
 
-    expect(DASHBOARD_SNAPSHOT)->toBeReadableFile()
-        ->and($json)->toBe(file_get_contents(DASHBOARD_SNAPSHOT));
+    expect(contractPath('dashboard.json'))->toBeReadableFile()
+        ->and($json)->toBe(file_get_contents(contractPath('dashboard.json')));
 });

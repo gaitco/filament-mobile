@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "panel": { "id": "admin", "title": "لوحة التحكم" },
+  "resources": [
+    {
+      "key": "signatures",
+      "labels": { "singular": "توقيع", "plural": "التوقيعات" },
+      "form": [
+        { "type": "signature_pad", "name": "signature", "label": "التوقيع" },
+        { "type": "text", "name": "note", "label": "ملاحظة" }
+      ]
+    }
+  ]
+}

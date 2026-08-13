@@ -1,0 +1,357 @@
+{
+  "version": 1,
+  "panel": {
+    "id": "admin",
+    "title": "لوحة التحكم",
+    "navigation": [
+      {
+        "group": "الإدارة",
+        "resources": [
+          "users"
+        ]
+      },
+      {
+        "group": "المحتوى",
+        "resources": [
+          "posts"
+        ]
+      }
+    ]
+  },
+  "resources": [
+    {
+      "key": "users",
+      "labels": {
+        "singular": "مستخدم",
+        "plural": "المستخدمون",
+        "icon": "users"
+      },
+      "permissions": {
+        "viewAny": true,
+        "view": true,
+        "create": true,
+        "update": true,
+        "delete": false
+      },
+      "recordKey": "id",
+      "card": {
+        "title": {
+          "field": "name"
+        },
+        "subtitle": {
+          "field": "email"
+        },
+        "leading": {
+          "type": "image",
+          "field": "avatar_url",
+          "fallback": "initials"
+        },
+        "badges": [
+          {
+            "field": "status",
+            "colors": {
+              "active": "success",
+              "banned": "danger"
+            }
+          }
+        ],
+        "meta": [
+          {
+            "field": "created_at",
+            "format": "date"
+          }
+        ]
+      },
+      "search": {
+        "enabled": true,
+        "placeholder": "ابحث بالاسم أو البريد"
+      },
+      "sorts": [
+        {
+          "key": "created_at",
+          "label": "الأحدث",
+          "direction": "desc",
+          "default": true
+        },
+        {
+          "key": "name",
+          "label": "الاسم",
+          "direction": "asc"
+        }
+      ],
+      "filters": [
+        {
+          "type": "select",
+          "name": "status",
+          "label": "الحالة",
+          "config": {
+            "options": [
+              {
+                "value": "active",
+                "label": "نشط"
+              },
+              {
+                "value": "banned",
+                "label": "محظور"
+              }
+            ]
+          }
+        }
+      ],
+      "form": [
+        {
+          "type": "section",
+          "label": "البيانات الأساسية",
+          "collapsible": true,
+          "columns": 2,
+          "children": [
+            {
+              "type": "text",
+              "name": "name",
+              "label": "الاسم",
+              "columnSpan": 6,
+              "rules": {
+                "required": true,
+                "max": 255
+              }
+            },
+            {
+              "type": "email",
+              "name": "email",
+              "label": "البريد الإلكتروني",
+              "columnSpan": 6,
+              "rules": {
+                "required": true,
+                "email": true
+              }
+            },
+            {
+              "type": "password",
+              "name": "password",
+              "label": "كلمة المرور",
+              "rules": {
+                "required": true,
+                "min": 8,
+                "confirmed": true
+              }
+            },
+            {
+              "type": "select",
+              "name": "country_id",
+              "label": "الدولة",
+              "live": true,
+              "config": {
+                "optionsUrl": "/api/mobile-panel/users/options/country_id",
+                "searchable": true
+              }
+            },
+            {
+              "type": "select",
+              "name": "city_id",
+              "label": "المدينة",
+              "hidden": true,
+              "config": {
+                "options": []
+              }
+            },
+            {
+              "type": "multiselect",
+              "name": "roles",
+              "label": "الأدوار",
+              "config": {
+                "options": [
+                  {
+                    "value": 1,
+                    "label": "مدير"
+                  },
+                  {
+                    "value": 2,
+                    "label": "محرر"
+                  }
+                ]
+              }
+            },
+            {
+              "type": "number",
+              "name": "credit",
+              "label": "الرصيد",
+              "config": {
+                "prefix": "ج.م"
+              }
+            },
+            {
+              "type": "toggle",
+              "name": "is_active",
+              "label": "نشط",
+              "default": true
+            },
+            {
+              "type": "checkbox",
+              "name": "newsletter",
+              "label": "النشرة البريدية"
+            },
+            {
+              "type": "date",
+              "name": "born_at",
+              "label": "تاريخ الميلاد",
+              "config": {
+                "maxDate": "2026-08-02"
+              }
+            },
+            {
+              "type": "datetime",
+              "name": "verified_at",
+              "label": "تاريخ التوثيق"
+            },
+            {
+              "type": "textarea",
+              "name": "bio",
+              "label": "نبذة"
+            }
+          ]
+        },
+        {
+          "type": "tabs",
+          "children": [
+            {
+              "type": "fieldset",
+              "label": "الروابط",
+              "columns": 2,
+              "children": [
+                {
+                  "type": "text",
+                  "name": "website",
+                  "label": "الموقع الإلكتروني",
+                  "helperText": "يبدأ بـ https://",
+                  "columnSpan": 6,
+                  "rules": {
+                    "url": true
+                  }
+                },
+                {
+                  "type": "text",
+                  "name": "handle",
+                  "label": "المعرّف",
+                  "helperText": "حروف إنجليزية صغيرة وأرقام فقط",
+                  "columnSpan": 6,
+                  "rules": {
+                    "regex": "^[a-z0-9_]+$",
+                    "max": 30
+                  }
+                }
+              ]
+            },
+            {
+              "type": "fieldset",
+              "label": "بيانات النظام",
+              "children": [
+                {
+                  "type": "text",
+                  "name": "last_login_ip",
+                  "label": "آخر عنوان دخول",
+                  "helperText": "يُحدَّث تلقائيًا عند كل تسجيل دخول",
+                  "disabled": true
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "infolist": [
+        {
+          "type": "grid",
+          "columns": 2,
+          "children": [
+            {
+              "type": "text_entry",
+              "name": "name",
+              "label": "الاسم"
+            },
+            {
+              "type": "badge_entry",
+              "name": "status",
+              "label": "الحالة",
+              "config": {
+                "colors": {
+                  "active": "success"
+                }
+              }
+            },
+            {
+              "type": "image_entry",
+              "name": "avatar_url",
+              "label": "الصورة",
+              "config": {
+                "fallback": "initials"
+              }
+            },
+            {
+              "type": "boolean_entry",
+              "name": "is_active",
+              "label": "نشط"
+            },
+            {
+              "type": "date_entry",
+              "name": "created_at",
+              "label": "أُنشئ في",
+              "config": {
+                "format": "d MMMM y"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "key": "posts",
+      "labels": {
+        "singular": "مقال",
+        "plural": "المقالات"
+      },
+      "permissions": {
+        "viewAny": true,
+        "view": true
+      },
+      "card": {
+        "title": {
+          "field": "title"
+        }
+      }
+    },
+    {
+      "key": "activity_logs",
+      "labels": {
+        "singular": "سجل نشاط",
+        "plural": "سجل النشاط",
+        "icon": "clock"
+      },
+      "permissions": {
+        "viewAny": true,
+        "view": true
+      },
+      "card": {
+        "title": {
+          "field": "description"
+        },
+        "leading": {
+          "type": "icon",
+          "field": "event"
+        },
+        "meta": [
+          {
+            "field": "created_at",
+            "format": "datetime"
+          }
+        ]
+      },
+      "sorts": [
+        {
+          "key": "created_at",
+          "label": "الأحدث",
+          "direction": "desc",
+          "default": true
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,71 @@
+{
+    "data": {
+        "id": 1,
+        "name": "Sale",
+        "body_html": "<p>Hello <strong>world</strong> and <a href=\"https://example.test\">link</a></p>",
+        "prose_note": null,
+        "prose_body": null,
+        "exploding_body": null,
+        "line_items": [
+            {
+                "sku": "A-1",
+                "qty": 2
+            },
+            {
+                "sku": "B-2",
+                "qty": 5
+            }
+        ],
+        "body_html.__rich": {
+            "doc": {
+                "type": "doc",
+                "content": [
+                    {
+                        "type": "paragraph",
+                        "attrs": {
+                            "textAlign": "start"
+                        },
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": "Hello "
+                            },
+                            {
+                                "type": "text",
+                                "text": "world",
+                                "marks": [
+                                    {
+                                        "type": "bold"
+                                    }
+                                ]
+                            },
+                            {
+                                "type": "text",
+                                "text": " and "
+                            },
+                            {
+                                "type": "text",
+                                "text": "link",
+                                "marks": [
+                                    {
+                                        "type": "link",
+                                        "attrs": {
+                                            "href": "https://example.test"
+                                        }
+                                    }
+                                ]
+                            }
+                        ]
+                    }
+                ]
+            },
+            "text": "Hello world and link"
+        }
+    },
+    "permissions": {
+        "view": true,
+        "update": true,
+        "delete": true
+    },
+    "actions": []
+}

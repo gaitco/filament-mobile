@@ -28,7 +28,6 @@ use Gait\FilamentMobile\Tests\Fixtures\Resources\RichResource;
  * serialized data — a fixture built by hand-wrapping RecordSerializer would
  * pin the serializer's shape while leaving the endpoint's envelope unchecked.
  */
-const RECORD_SNAPSHOT = __DIR__ . '/../../../../contract/record-payload.json';
 
 it('matches the committed record-payload contract snapshot', function () {
     // RichResource is not in TestCase's shared list (see its own docblock) —
@@ -64,7 +63,7 @@ it('matches the committed record-payload contract snapshot', function () {
     ) . "\n";
 
     if (getenv('UPDATE_SNAPSHOTS') === '1') {
-        file_put_contents(RECORD_SNAPSHOT, $json);
+        file_put_contents(contractPath('record-payload.json'), $json);
     }
 
     // Compared as STRUCTURE, not bytes. The golden is generated on SQLite and
@@ -80,7 +79,7 @@ it('matches the committed record-payload contract snapshot', function () {
     // different order" stops being a failure. The file is still written
     // pretty-printed under UPDATE_SNAPSHOTS=1, so it stays readable as
     // documentation.
-    expect(RECORD_SNAPSHOT)->toBeReadableFile()
+    expect(contractPath('record-payload.json'))->toBeReadableFile()
         ->and(keySorted(json_decode($json, true)))
-        ->toBe(keySorted(json_decode(file_get_contents(RECORD_SNAPSHOT), true)));
+        ->toBe(keySorted(json_decode(file_get_contents(contractPath('record-payload.json')), true)));
 });

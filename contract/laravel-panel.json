@@ -1,0 +1,1612 @@
+{
+    "version": 1,
+    "panel": {
+        "id": "mobile",
+        "title": "Laravel",
+        "locale": "en",
+        "direction": "ltr"
+    },
+    "resources": [
+        {
+            "key": "posts",
+            "labels": {
+                "singular": "post",
+                "plural": "posts"
+            },
+            "permissions": {
+                "viewAny": true,
+                "view": true,
+                "create": true,
+                "update": true,
+                "delete": true
+            },
+            "recordKey": "id",
+            "card": {
+                "title": {
+                    "field": "title"
+                },
+                "subtitle": {
+                    "field": "body"
+                }
+            },
+            "search": {
+                "enabled": true
+            },
+            "sorts": [
+                {
+                    "key": "created_at",
+                    "label": "Newest",
+                    "direction": "desc",
+                    "default": true
+                },
+                {
+                    "key": "title",
+                    "label": "Title",
+                    "direction": "asc"
+                }
+            ],
+            "filters": [],
+            "relations": [],
+            "form": [
+                {
+                    "type": "text",
+                    "name": "title",
+                    "label": "Title",
+                    "helperText": null,
+                    "hidden": false,
+                    "disabled": false,
+                    "live": false,
+                    "rules": {
+                        "required": true,
+                        "max": 120,
+                        "messages": {
+                            "required": "The title field is required.",
+                            "max": "The title field must not be greater than 120 characters."
+                        }
+                    }
+                },
+                {
+                    "type": "textarea",
+                    "name": "body",
+                    "label": "Body",
+                    "helperText": null,
+                    "hidden": false,
+                    "disabled": false,
+                    "live": false,
+                    "rules": []
+                },
+                {
+                    "type": "toggle",
+                    "name": "published",
+                    "label": "Published",
+                    "helperText": null,
+                    "hidden": false,
+                    "disabled": false,
+                    "live": false,
+                    "rules": [],
+                    "default": false
+                },
+                {
+                    "type": "checkbox",
+                    "name": "featured",
+                    "label": "Featured",
+                    "helperText": null,
+                    "hidden": false,
+                    "disabled": false,
+                    "live": false,
+                    "rules": [],
+                    "default": false
+                },
+                {
+                    "type": "grid",
+                    "name": null,
+                    "label": null,
+                    "helperText": null,
+                    "hidden": false,
+                    "disabled": false,
+                    "live": false,
+                    "rules": [],
+                    "children": [
+                        {
+                            "type": "date",
+                            "name": "published_on",
+                            "label": "Published on",
+                            "helperText": null,
+                            "hidden": false,
+                            "disabled": false,
+                            "live": false,
+                            "rules": [],
+                            "config": {
+                                "minDate": null,
+                                "maxDate": null,
+                                "seconds": true
+                            }
+                        },
+                        {
+                            "type": "datetime",
+                            "name": "published_at",
+                            "label": "Published at",
+                            "helperText": null,
+                            "hidden": false,
+                            "disabled": false,
+                            "live": false,
+                            "rules": [],
+                            "config": {
+                                "minDate": "2026-01-01",
+                                "maxDate": "2026-12-31",
+                                "seconds": true
+                            }
+                        },
+                        {
+                            "type": "time",
+                            "name": "opens_at",
+                            "label": "Opens at",
+                            "helperText": null,
+                            "hidden": false,
+                            "disabled": false,
+                            "live": false,
+                            "rules": [],
+                            "config": {
+                                "minDate": "09:00",
+                                "maxDate": "17:00",
+                                "seconds": false
+                            }
+                        },
+                        {
+                            "type": "time",
+                            "name": "closes_at",
+                            "label": "Closes at",
+                            "helperText": null,
+                            "hidden": false,
+                            "disabled": false,
+                            "live": false,
+                            "rules": [],
+                            "config": {
+                                "minDate": null,
+                                "maxDate": null,
+                                "seconds": true
+                            }
+                        },
+                        {
+                            "type": "time",
+                            "name": "reminder_at",
+                            "label": "Reminder at",
+                            "helperText": null,
+                            "hidden": false,
+                            "disabled": false,
+                            "live": false,
+                            "rules": [],
+                            "config": {
+                                "minDate": "2026-01-01 09:00:00",
+                                "maxDate": null,
+                                "seconds": true
+                            }
+                        }
+                    ]
+                },
+                {
+                    "type": "color",
+                    "name": "accent_color",
+                    "label": "Accent color",
+                    "helperText": null,
+                    "hidden": false,
+                    "disabled": false,
+                    "live": false,
+                    "rules": [],
+                    "config": {
+                        "format": "rgba"
+                    }
+                },
+                {
+                    "type": "multiselect",
+                    "name": "tags",
+                    "label": "Tags",
+                    "helperText": null,
+                    "hidden": false,
+                    "disabled": false,
+                    "live": false,
+                    "rules": [],
+                    "config": {
+                        "options": [
+                            {
+                                "value": "a",
+                                "label": "A"
+                            },
+                            {
+                                "value": "b",
+                                "label": "B"
+                            }
+                        ]
+                    }
+                },
+                {
+                    "type": "email",
+                    "name": "contact_email",
+                    "label": "Contact email",
+                    "helperText": null,
+                    "hidden": false,
+                    "disabled": false,
+                    "live": false,
+                    "rules": {
+                        "email": true,
+                        "messages": {
+                            "email": "The contact email field must be a valid email address."
+                        }
+                    }
+                },
+                {
+                    "type": "password",
+                    "name": "secret",
+                    "label": "Secret",
+                    "helperText": null,
+                    "hidden": false,
+                    "disabled": false,
+                    "live": false,
+                    "rules": []
+                },
+                {
+                    "type": "number",
+                    "name": "views",
+                    "label": "Views",
+                    "helperText": null,
+                    "hidden": false,
+                    "disabled": false,
+                    "live": false,
+                    "rules": {
+                        "numeric": true,
+                        "messages": {
+                            "numeric": "The views field must be a number."
+                        }
+                    }
+                },
+                {
+                    "type": "tabs",
+                    "name": null,
+                    "label": "More",
+                    "helperText": null,
+                    "hidden": false,
+                    "disabled": false,
+                    "live": false,
+                    "rules": [],
+                    "children": [
+                        {
+                            "type": "section",
+                            "name": null,
+                            "label": "Details",
+                            "helperText": null,
+                            "hidden": false,
+                            "disabled": false,
+                            "live": false,
+                            "rules": [],
+                            "children": [
+                                {
+                                    "type": "fieldset",
+                                    "name": null,
+                                    "label": "Audit",
+                                    "helperText": null,
+                                    "hidden": false,
+                                    "disabled": false,
+                                    "live": false,
+                                    "rules": [],
+                                    "children": [
+                                        {
+                                            "type": "text",
+                                            "name": "author",
+                                            "label": "Author",
+                                            "helperText": null,
+                                            "hidden": false,
+                                            "disabled": false,
+                                            "live": false,
+                                            "rules": []
+                                        }
+                                    ]
+                                }
+                            ]
+                        }
+                    ]
+                }
+            ],
+            "infolist": [
+                {
+                    "type": "text_entry",
+                    "name": "title",
+                    "label": "Title",
+                    "helperText": null,
+                    "hidden": false,
+                    "disabled": false,
+                    "live": false,
+                    "rules": []
+                },
+                {
+                    "type": "text_entry",
+                    "name": "body",
+                    "label": "Body",
+                    "helperText": null,
+                    "hidden": false,
+                    "disabled": false,
+                    "live": false,
+                    "rules": []
+                },
+                {
+                    "type": "boolean_entry",
+                    "name": "published",
+                    "label": "Published",
+                    "helperText": null,
+                    "hidden": false,
+                    "disabled": false,
+                    "live": false,
+                    "rules": [],
+                    "config": {
+                        "icons": {
+                            "true": "o-check-circle",
+                            "false": "o-x-circle"
+                        },
+                        "colors": {
+                            "true": "success",
+                            "false": "danger"
+                        }
+                    }
+                },
+                {
+                    "type": "image_entry",
+                    "name": "cover_url",
+                    "label": "Cover url",
+                    "helperText": null,
+                    "hidden": false,
+                    "disabled": false,
+                    "live": false,
+                    "rules": []
+                }
+            ]
+        },
+        {
+            "key": "banners",
+            "labels": {
+                "singular": "banner",
+                "plural": "banners"
+            },
+            "permissions": {
+                "viewAny": true,
+                "view": true,
+                "create": true,
+                "update": true,
+                "delete": true
+            },
+            "recordKey": "id",
+            "card": {
+                "title": {
+                    "field": "name"
+                },
+                "subtitle": {
+                    "field": "company.name"
+                },
+                "badges": [
+                    {
+                        "field": "status",
+                        "colors": {
+                            "active": "success",
+                            "draft": "warning"
+                        }
+                    }
+                ],
+                "meta": [
+                    {
+                        "field": "created_at",
+                        "format": "date"
+                    }
+                ]
+            },
+            "search": {
+                "enabled": true
+            },
+            "sorts": [
+                {
+                    "key": "created_at",
+                    "label": "Newest",
+                    "direction": "desc",
+                    "default": true
+                },
+                {
+                    "key": "name",
+                    "label": "Name",
+                    "direction": "asc"
+                }
+            ],
+            "filters": [],
+            "relations": [
+                {
+                    "key": "tags",
+                    "label": "Tags",
+                    "card": {
+                        "title": {
+                            "field": "name"
+                        }
+                    },
+                    "recordKey": "name"
+                }
+            ],
+            "form": [
+                {
+                    "type": "section",
+                    "name": null,
+                    "label": "Details",
+                    "helperText": null,
+                    "hidden": false,
+                    "disabled": false,
+                    "live": false,
+                    "rules": [],
+                    "children": [
+                        {
+                            "type": "text",
+                            "name": "name",
+                            "label": "Display Title",
+                            "helperText": null,
+                            "hidden": false,
+                            "disabled": false,
+                            "live": false,
+                            "rules": {
+                                "required": true,
+                                "max": 80,
+                                "messages": {
+                                    "required": "The display Title field is required.",
+                                    "max": "The display Title field must not be greater than 80 characters."
+                                }
+                            }
+                        },
+                        {
+                            "type": "number",
+                            "name": "quantity",
+                            "label": "Quantity",
+                            "helperText": null,
+                            "hidden": false,
+                            "disabled": false,
+                            "live": false,
+                            "rules": {
+                                "numeric": true,
+                                "messages": {
+                                    "numeric": "The quantity field must be a number."
+                                }
+                            }
+                        },
+                        {
+                            "type": "email",
+                            "name": "numeric_email",
+                            "label": "Numeric email",
+                            "helperText": null,
+                            "hidden": false,
+                            "disabled": false,
+                            "live": false,
+                            "rules": {
+                                "numeric": true,
+                                "email": true,
+                                "messages": {
+                                    "numeric": "The numeric email field must be a number.",
+                                    "email": "The numeric email field must be a valid email address."
+                                }
+                            }
+                        },
+                        {
+                            "type": "number",
+                            "name": "bounded_quantity",
+                            "label": "Bounded quantity",
+                            "helperText": null,
+                            "hidden": false,
+                            "disabled": false,
+                            "live": false,
+                            "rules": {
+                                "max": 80,
+                                "numeric": true,
+                                "messages": {
+                                    "max": "The bounded quantity field must not be greater than 80.",
+                                    "numeric": "The bounded quantity field must be a number."
+                                }
+                            }
+                        },
+                        {
+                            "type": "textarea",
+                            "name": "body_html",
+                            "label": "Body html",
+                            "helperText": null,
+                            "hidden": false,
+                            "disabled": false,
+                            "live": false,
+                            "rules": {
+                                "required": true,
+                                "messages": {
+                                    "required": "The body html field is required."
+                                }
+                            }
+                        },
+                        {
+                            "type": "email",
+                            "name": "contact_email",
+                            "label": "Contact email",
+                            "helperText": null,
+                            "hidden": false,
+                            "disabled": false,
+                            "live": false,
+                            "rules": {
+                                "email": true,
+                                "messages": {
+                                    "email": "The contact email field must be a valid email address."
+                                }
+                            }
+                        },
+                        {
+                            "type": "select",
+                            "name": "status",
+                            "label": "Status",
+                            "helperText": null,
+                            "hidden": false,
+                            "disabled": false,
+                            "live": false,
+                            "rules": [],
+                            "placeholder": "Select an option",
+                            "default": "draft",
+                            "config": {
+                                "options": [
+                                    {
+                                        "value": "draft",
+                                        "label": "Draft"
+                                    },
+                                    {
+                                        "value": "active",
+                                        "label": "Active"
+                                    },
+                                    {
+                                        "value": "archived",
+                                        "label": "Archived"
+                                    }
+                                ]
+                            }
+                        },
+                        {
+                            "type": "radio",
+                            "name": "plan",
+                            "label": "Plan",
+                            "helperText": null,
+                            "hidden": false,
+                            "disabled": false,
+                            "live": false,
+                            "rules": [],
+                            "config": {
+                                "options": [
+                                    {
+                                        "value": "basic",
+                                        "label": "Basic"
+                                    },
+                                    {
+                                        "value": "pro",
+                                        "label": "Pro"
+                                    }
+                                ]
+                            }
+                        },
+                        {
+                            "type": "radio",
+                            "name": "exploding_plan",
+                            "label": "Exploding plan",
+                            "helperText": null,
+                            "hidden": false,
+                            "disabled": false,
+                            "live": false,
+                            "rules": []
+                        },
+                        {
+                            "type": "tags",
+                            "name": "labels",
+                            "label": "Labels",
+                            "helperText": null,
+                            "hidden": false,
+                            "disabled": false,
+                            "live": false,
+                            "rules": [],
+                            "placeholder": "New tag",
+                            "default": [],
+                            "config": {
+                                "separator": null,
+                                "suggestions": [
+                                    "urgent",
+                                    "billing"
+                                ]
+                            }
+                        },
+                        {
+                            "type": "tags",
+                            "name": "separated_labels",
+                            "label": "Separated labels",
+                            "helperText": null,
+                            "hidden": false,
+                            "disabled": false,
+                            "live": false,
+                            "rules": [],
+                            "placeholder": "New tag",
+                            "default": [],
+                            "config": {
+                                "separator": ",",
+                                "suggestions": []
+                            }
+                        },
+                        {
+                            "type": "tags",
+                            "name": "exploding_labels",
+                            "label": "Exploding labels",
+                            "helperText": null,
+                            "hidden": false,
+                            "disabled": false,
+                            "live": false,
+                            "rules": [],
+                            "placeholder": "New tag",
+                            "default": [],
+                            "config": {
+                                "separator": null,
+                                "suggestions": []
+                            }
+                        },
+                        {
+                            "type": "keyvalue",
+                            "name": "meta",
+                            "label": "Meta",
+                            "helperText": null,
+                            "hidden": false,
+                            "disabled": false,
+                            "live": false,
+                            "rules": [],
+                            "default": {
+                                "env": "production",
+                                "region": "eu"
+                            },
+                            "config": {
+                                "addable": true,
+                                "deletable": true,
+                                "editableKeys": true,
+                                "editableValues": true,
+                                "keyLabel": "Attribute",
+                                "valueLabel": "Detail",
+                                "keyPlaceholder": "e.g. env",
+                                "valuePlaceholder": "e.g. production"
+                            }
+                        },
+                        {
+                            "type": "keyvalue",
+                            "name": "restricted_meta",
+                            "label": "Restricted meta",
+                            "helperText": null,
+                            "hidden": false,
+                            "disabled": false,
+                            "live": false,
+                            "rules": [],
+                            "default": {
+                                "a": "1",
+                                "b": "2"
+                            },
+                            "config": {
+                                "addable": false,
+                                "deletable": true,
+                                "editableKeys": false,
+                                "editableValues": true,
+                                "keyLabel": "Key",
+                                "valueLabel": "Value",
+                                "keyPlaceholder": null,
+                                "valuePlaceholder": null
+                            }
+                        },
+                        {
+                            "type": "keyvalue",
+                            "name": "restricted_meta_2",
+                            "label": "Restricted meta 2",
+                            "helperText": null,
+                            "hidden": false,
+                            "disabled": false,
+                            "live": false,
+                            "rules": [],
+                            "default": {
+                                "a": "1",
+                                "b": "2"
+                            },
+                            "config": {
+                                "addable": true,
+                                "deletable": false,
+                                "editableKeys": true,
+                                "editableValues": false,
+                                "keyLabel": "Key",
+                                "valueLabel": "Value",
+                                "keyPlaceholder": null,
+                                "valuePlaceholder": null
+                            }
+                        },
+                        {
+                            "type": "keyvalue",
+                            "name": "exploding_meta",
+                            "label": "Exploding meta",
+                            "helperText": null,
+                            "hidden": false,
+                            "disabled": false,
+                            "live": false,
+                            "rules": [],
+                            "default": {},
+                            "config": {
+                                "addable": true,
+                                "deletable": true,
+                                "editableKeys": true,
+                                "editableValues": true,
+                                "keyLabel": "Key",
+                                "valueLabel": "Value",
+                                "keyPlaceholder": null,
+                                "valuePlaceholder": null
+                            }
+                        },
+                        {
+                            "type": "text",
+                            "name": "throwing_default",
+                            "label": "Throwing default",
+                            "helperText": null,
+                            "hidden": false,
+                            "disabled": false,
+                            "live": false,
+                            "rules": []
+                        },
+                        {
+                            "type": "text",
+                            "name": "trap",
+                            "label": "Trap",
+                            "helperText": null,
+                            "hidden": true,
+                            "disabled": true,
+                            "live": false,
+                            "rules": [],
+                            "writable": false
+                        },
+                        {
+                            "type": "select",
+                            "name": "company_id",
+                            "label": "Company",
+                            "helperText": null,
+                            "hidden": false,
+                            "disabled": false,
+                            "live": false,
+                            "rules": [],
+                            "placeholder": "Select an option"
+                        },
+                        {
+                            "type": "select",
+                            "name": "searchable_company_id",
+                            "label": "Company",
+                            "helperText": null,
+                            "hidden": false,
+                            "disabled": false,
+                            "live": false,
+                            "rules": [],
+                            "placeholder": "Select an option",
+                            "config": {
+                                "optionsUrl": "/api/mobile-panel/banners/options",
+                                "searchable": true
+                            }
+                        },
+                        {
+                            "type": "select",
+                            "name": "scoped_company_id",
+                            "label": "Company",
+                            "helperText": null,
+                            "hidden": false,
+                            "disabled": false,
+                            "live": false,
+                            "rules": [],
+                            "placeholder": "Select an option",
+                            "config": {
+                                "optionsUrl": "/api/mobile-panel/banners/options",
+                                "searchable": true
+                            }
+                        },
+                        {
+                            "type": "multiselect",
+                            "name": "tag_ids",
+                            "label": "Tags",
+                            "helperText": null,
+                            "hidden": false,
+                            "disabled": false,
+                            "live": false,
+                            "rules": [],
+                            "placeholder": "Select an option",
+                            "config": {
+                                "optionsUrl": "/api/mobile-panel/banners/options",
+                                "searchable": true
+                            }
+                        },
+                        {
+                            "type": "multiselect",
+                            "name": "gated_tag_ids",
+                            "label": "Tags",
+                            "helperText": null,
+                            "hidden": false,
+                            "disabled": true,
+                            "live": false,
+                            "rules": [],
+                            "config": {
+                                "optionsUrl": "/api/mobile-panel/banners/options",
+                                "searchable": true
+                            }
+                        },
+                        {
+                            "type": "multiselect",
+                            "name": "plain_multi",
+                            "label": "Plain multi",
+                            "helperText": null,
+                            "hidden": false,
+                            "disabled": false,
+                            "live": false,
+                            "rules": [],
+                            "placeholder": "Select an option",
+                            "default": [
+                                "a",
+                                "b",
+                                "c"
+                            ],
+                            "config": {
+                                "options": [
+                                    {
+                                        "value": "a",
+                                        "label": "A"
+                                    },
+                                    {
+                                        "value": "b",
+                                        "label": "B"
+                                    },
+                                    {
+                                        "value": "c",
+                                        "label": "C"
+                                    }
+                                ]
+                            }
+                        },
+                        {
+                            "type": "multiselect",
+                            "name": "checkbox_tag_ids",
+                            "label": "Tags",
+                            "helperText": null,
+                            "hidden": false,
+                            "disabled": false,
+                            "live": false,
+                            "rules": []
+                        },
+                        {
+                            "type": "text",
+                            "name": "caption.en",
+                            "label": "En",
+                            "helperText": null,
+                            "hidden": false,
+                            "disabled": false,
+                            "live": false,
+                            "rules": []
+                        },
+                        {
+                            "type": "text",
+                            "name": "caption",
+                            "label": "Caption",
+                            "helperText": null,
+                            "hidden": false,
+                            "disabled": false,
+                            "live": false,
+                            "rules": []
+                        },
+                        {
+                            "type": "text",
+                            "name": "secret_note",
+                            "label": "Secret note",
+                            "helperText": null,
+                            "hidden": false,
+                            "disabled": false,
+                            "live": false,
+                            "rules": []
+                        },
+                        {
+                            "type": "text",
+                            "name": "bypass_note",
+                            "label": "Bypass note",
+                            "helperText": null,
+                            "hidden": false,
+                            "disabled": false,
+                            "live": false,
+                            "rules": []
+                        },
+                        {
+                            "type": "text",
+                            "name": "op_note",
+                            "label": "Op note",
+                            "helperText": null,
+                            "hidden": true,
+                            "disabled": false,
+                            "live": false,
+                            "rules": [],
+                            "default": "leak"
+                        },
+                        {
+                            "type": "text",
+                            "name": "rec_note",
+                            "label": "Rec note",
+                            "helperText": null,
+                            "hidden": false,
+                            "disabled": false,
+                            "live": false,
+                            "rules": []
+                        },
+                        {
+                            "type": "text",
+                            "name": "strict_note",
+                            "label": "Strict note",
+                            "helperText": null,
+                            "hidden": false,
+                            "disabled": true,
+                            "live": false,
+                            "rules": [],
+                            "writable": false
+                        },
+                        {
+                            "type": "text",
+                            "name": "probe_note",
+                            "label": "Probe note",
+                            "helperText": null,
+                            "hidden": false,
+                            "disabled": true,
+                            "live": false,
+                            "rules": [],
+                            "writable": false
+                        },
+                        {
+                            "type": "text",
+                            "name": "gate_note",
+                            "label": "Gate note",
+                            "helperText": null,
+                            "hidden": false,
+                            "disabled": true,
+                            "live": false,
+                            "rules": []
+                        },
+                        {
+                            "type": "text",
+                            "name": "sib_note",
+                            "label": "Sib note",
+                            "helperText": null,
+                            "hidden": false,
+                            "disabled": true,
+                            "live": false,
+                            "rules": []
+                        }
+                    ]
+                },
+                {
+                    "type": "section",
+                    "name": null,
+                    "label": "Restricted",
+                    "helperText": null,
+                    "hidden": false,
+                    "disabled": true,
+                    "live": false,
+                    "rules": [],
+                    "children": [
+                        {
+                            "type": "text",
+                            "name": "locked_note",
+                            "label": "Locked note",
+                            "helperText": null,
+                            "hidden": false,
+                            "disabled": true,
+                            "live": false,
+                            "rules": []
+                        },
+                        {
+                            "type": "radio",
+                            "name": "locked_plan",
+                            "label": "Locked plan",
+                            "helperText": null,
+                            "hidden": false,
+                            "disabled": true,
+                            "live": false,
+                            "rules": [],
+                            "config": {
+                                "options": [
+                                    {
+                                        "value": "basic",
+                                        "label": "Basic"
+                                    },
+                                    {
+                                        "value": "pro",
+                                        "label": "Pro"
+                                    }
+                                ]
+                            }
+                        },
+                        {
+                            "type": "keyvalue",
+                            "name": "locked_meta",
+                            "label": "Locked meta",
+                            "helperText": null,
+                            "hidden": false,
+                            "disabled": true,
+                            "live": false,
+                            "rules": [],
+                            "default": {},
+                            "config": {
+                                "addable": true,
+                                "deletable": true,
+                                "editableKeys": true,
+                                "editableValues": true,
+                                "keyLabel": "Key",
+                                "valueLabel": "Value",
+                                "keyPlaceholder": null,
+                                "valuePlaceholder": null
+                            }
+                        },
+                        {
+                            "type": "file",
+                            "name": "restricted_image",
+                            "label": "Restricted image",
+                            "helperText": null,
+                            "hidden": false,
+                            "disabled": true,
+                            "live": false,
+                            "rules": [],
+                            "config": {
+                                "readOnly": false
+                            }
+                        }
+                    ]
+                },
+                {
+                    "type": "text",
+                    "name": "relation_note",
+                    "label": "Relation note",
+                    "helperText": null,
+                    "hidden": false,
+                    "disabled": true,
+                    "live": false,
+                    "rules": [],
+                    "writable": false
+                },
+                {
+                    "type": "section",
+                    "name": null,
+                    "label": "Company",
+                    "helperText": null,
+                    "hidden": false,
+                    "disabled": true,
+                    "live": false,
+                    "rules": [],
+                    "writable": false,
+                    "children": [
+                        {
+                            "type": "text",
+                            "name": "name",
+                            "label": "Name",
+                            "helperText": null,
+                            "hidden": false,
+                            "disabled": false,
+                            "live": false,
+                            "rules": []
+                        }
+                    ]
+                },
+                {
+                    "type": "file",
+                    "name": "avatar",
+                    "label": "Avatar",
+                    "helperText": null,
+                    "hidden": false,
+                    "disabled": false,
+                    "live": false,
+                    "rules": [],
+                    "config": {
+                        "readOnly": false
+                    }
+                },
+                {
+                    "type": "file",
+                    "name": "hero_image",
+                    "label": "Hero image",
+                    "helperText": null,
+                    "hidden": false,
+                    "disabled": false,
+                    "live": false,
+                    "rules": [],
+                    "config": {
+                        "readOnly": false,
+                        "accept": [
+                            "image/png",
+                            "image/jpeg"
+                        ],
+                        "maxSize": 1024
+                    }
+                },
+                {
+                    "type": "file",
+                    "name": "gallery",
+                    "label": "Gallery",
+                    "helperText": null,
+                    "hidden": false,
+                    "disabled": false,
+                    "live": false,
+                    "rules": [],
+                    "writable": false,
+                    "config": {
+                        "readOnly": true
+                    }
+                },
+                {
+                    "type": "file",
+                    "name": "locked_file",
+                    "label": "Locked file",
+                    "helperText": null,
+                    "hidden": false,
+                    "disabled": true,
+                    "live": false,
+                    "rules": [],
+                    "config": {
+                        "readOnly": false
+                    }
+                },
+                {
+                    "type": "file",
+                    "name": "exploding_gate",
+                    "label": "Exploding gate",
+                    "helperText": null,
+                    "hidden": false,
+                    "disabled": true,
+                    "live": false,
+                    "rules": [],
+                    "writable": false,
+                    "config": {
+                        "readOnly": false
+                    }
+                },
+                {
+                    "type": "file",
+                    "name": "exploding_types",
+                    "label": "Exploding types",
+                    "helperText": null,
+                    "hidden": false,
+                    "disabled": false,
+                    "live": false,
+                    "rules": [],
+                    "config": {
+                        "readOnly": true
+                    }
+                },
+                {
+                    "type": "file",
+                    "name": "exploding_max_size",
+                    "label": "Exploding max size",
+                    "helperText": null,
+                    "hidden": false,
+                    "disabled": false,
+                    "live": false,
+                    "rules": [],
+                    "config": {
+                        "readOnly": true
+                    }
+                },
+                {
+                    "type": "file",
+                    "name": "exploding_multiple",
+                    "label": "Exploding multiple",
+                    "helperText": null,
+                    "hidden": false,
+                    "disabled": false,
+                    "live": false,
+                    "rules": [],
+                    "writable": false,
+                    "config": {
+                        "readOnly": true
+                    }
+                },
+                {
+                    "type": "file",
+                    "name": "exploding_disk",
+                    "label": "Exploding disk",
+                    "helperText": null,
+                    "hidden": false,
+                    "disabled": false,
+                    "live": false,
+                    "rules": [],
+                    "config": {
+                        "readOnly": false
+                    }
+                },
+                {
+                    "type": "repeater",
+                    "name": "line_items",
+                    "label": "Line items",
+                    "helperText": null,
+                    "hidden": false,
+                    "disabled": false,
+                    "live": false,
+                    "rules": [],
+                    "config": {
+                        "addable": true,
+                        "deletable": true,
+                        "minItems": 1,
+                        "maxItems": 5,
+                        "itemLabel": null,
+                        "reorderable": true,
+                        "readOnly": false
+                    },
+                    "children": [
+                        {
+                            "type": "text",
+                            "name": "sku",
+                            "label": "Sku",
+                            "helperText": null,
+                            "hidden": false,
+                            "disabled": false,
+                            "live": false,
+                            "rules": {
+                                "required": true,
+                                "max": 20,
+                                "messages": {
+                                    "required": "The sku field is required.",
+                                    "max": "The sku field must not be greater than 20 characters."
+                                }
+                            }
+                        },
+                        {
+                            "type": "number",
+                            "name": "qty",
+                            "label": "Qty",
+                            "helperText": null,
+                            "hidden": false,
+                            "disabled": false,
+                            "live": false,
+                            "rules": {
+                                "numeric": true,
+                                "messages": {
+                                    "numeric": "The qty field must be a number."
+                                }
+                            }
+                        }
+                    ]
+                },
+                {
+                    "type": "repeater",
+                    "name": "fixed_rows",
+                    "label": "Fixed rows",
+                    "helperText": null,
+                    "hidden": false,
+                    "disabled": false,
+                    "live": false,
+                    "rules": [],
+                    "config": {
+                        "addable": false,
+                        "deletable": false,
+                        "minItems": null,
+                        "maxItems": null,
+                        "itemLabel": null,
+                        "reorderable": true,
+                        "readOnly": false
+                    },
+                    "children": [
+                        {
+                            "type": "text",
+                            "name": "note",
+                            "label": "Note",
+                            "helperText": null,
+                            "hidden": false,
+                            "disabled": false,
+                            "live": false,
+                            "rules": []
+                        }
+                    ]
+                },
+                {
+                    "type": "repeater",
+                    "name": "tag_rows",
+                    "label": "Tags",
+                    "helperText": null,
+                    "hidden": false,
+                    "disabled": false,
+                    "live": false,
+                    "rules": [],
+                    "config": {
+                        "addable": true,
+                        "deletable": true,
+                        "minItems": null,
+                        "maxItems": null,
+                        "itemLabel": null,
+                        "reorderable": false,
+                        "readOnly": false
+                    },
+                    "children": [
+                        {
+                            "type": "text",
+                            "name": "name",
+                            "label": "Name",
+                            "helperText": null,
+                            "hidden": false,
+                            "disabled": false,
+                            "live": false,
+                            "rules": []
+                        }
+                    ]
+                },
+                {
+                    "type": "repeater",
+                    "name": "exploding_relationship",
+                    "label": null,
+                    "helperText": null,
+                    "hidden": false,
+                    "disabled": false,
+                    "live": false,
+                    "rules": [],
+                    "config": {
+                        "addable": true,
+                        "deletable": true,
+                        "minItems": null,
+                        "maxItems": null,
+                        "itemLabel": null,
+                        "reorderable": false,
+                        "readOnly": true
+                    },
+                    "children": [
+                        {
+                            "type": "text",
+                            "name": "name",
+                            "label": "Name",
+                            "helperText": null,
+                            "hidden": false,
+                            "disabled": false,
+                            "live": false,
+                            "rules": []
+                        }
+                    ]
+                },
+                {
+                    "type": "repeater",
+                    "name": "exploding_repeater",
+                    "label": "Exploding repeater",
+                    "helperText": null,
+                    "hidden": false,
+                    "disabled": false,
+                    "live": false,
+                    "rules": [],
+                    "config": {
+                        "addable": true,
+                        "deletable": true,
+                        "minItems": null,
+                        "maxItems": null,
+                        "itemLabel": null,
+                        "reorderable": true,
+                        "readOnly": false
+                    },
+                    "children": [
+                        {
+                            "type": "text",
+                            "name": "x",
+                            "label": "X",
+                            "helperText": null,
+                            "hidden": false,
+                            "disabled": false,
+                            "live": false,
+                            "rules": []
+                        }
+                    ]
+                },
+                {
+                    "type": "repeater",
+                    "name": "locked_rows",
+                    "label": "Locked rows",
+                    "helperText": null,
+                    "hidden": false,
+                    "disabled": true,
+                    "live": false,
+                    "rules": [],
+                    "config": {
+                        "addable": false,
+                        "deletable": false,
+                        "minItems": null,
+                        "maxItems": null,
+                        "itemLabel": null,
+                        "reorderable": false,
+                        "readOnly": true
+                    },
+                    "children": [
+                        {
+                            "type": "text",
+                            "name": "note",
+                            "label": "Note",
+                            "helperText": null,
+                            "hidden": false,
+                            "disabled": true,
+                            "live": false,
+                            "rules": []
+                        }
+                    ]
+                },
+                {
+                    "type": "repeater",
+                    "name": "guarded_rows",
+                    "label": "Guarded rows",
+                    "helperText": null,
+                    "hidden": false,
+                    "disabled": false,
+                    "live": false,
+                    "rules": [],
+                    "config": {
+                        "addable": true,
+                        "deletable": true,
+                        "minItems": null,
+                        "maxItems": null,
+                        "itemLabel": null,
+                        "reorderable": true,
+                        "readOnly": true
+                    },
+                    "children": [
+                        {
+                            "type": "text",
+                            "name": "sku",
+                            "label": "Sku",
+                            "helperText": null,
+                            "hidden": false,
+                            "disabled": false,
+                            "live": false,
+                            "rules": []
+                        }
+                    ]
+                },
+                {
+                    "type": "repeater",
+                    "name": "relation_rows",
+                    "label": "Relation rows",
+                    "helperText": null,
+                    "hidden": false,
+                    "disabled": false,
+                    "live": false,
+                    "rules": [],
+                    "config": {
+                        "addable": true,
+                        "deletable": true,
+                        "minItems": null,
+                        "maxItems": null,
+                        "itemLabel": null,
+                        "reorderable": true,
+                        "readOnly": true
+                    },
+                    "children": [
+                        {
+                            "type": "text",
+                            "name": "title",
+                            "label": "Title",
+                            "helperText": null,
+                            "hidden": false,
+                            "disabled": false,
+                            "live": false,
+                            "rules": []
+                        },
+                        {
+                            "type": "multiselect",
+                            "name": "tags",
+                            "label": "Tags",
+                            "helperText": null,
+                            "hidden": false,
+                            "disabled": false,
+                            "live": false,
+                            "rules": []
+                        }
+                    ]
+                },
+                {
+                    "type": "select",
+                    "name": "country_id",
+                    "label": "Country id",
+                    "helperText": null,
+                    "hidden": false,
+                    "disabled": false,
+                    "live": false,
+                    "rules": [],
+                    "placeholder": "Select an option",
+                    "config": {
+                        "options": [
+                            {
+                                "value": 3,
+                                "label": "Egypt"
+                            },
+                            {
+                                "value": 99,
+                                "label": "Elsewhere"
+                            }
+                        ]
+                    }
+                },
+                {
+                    "type": "select",
+                    "name": "city_id",
+                    "label": "City id",
+                    "helperText": null,
+                    "hidden": true,
+                    "disabled": false,
+                    "live": false,
+                    "rules": [],
+                    "placeholder": "Select an option",
+                    "config": {
+                        "options": [
+                            {
+                                "value": "cai",
+                                "label": "Cairo"
+                            }
+                        ]
+                    }
+                },
+                {
+                    "type": "text",
+                    "name": "active_note",
+                    "label": "Active note",
+                    "helperText": null,
+                    "hidden": true,
+                    "disabled": false,
+                    "live": false,
+                    "rules": []
+                },
+                {
+                    "type": "text",
+                    "name": "featured_note",
+                    "label": "Featured note",
+                    "helperText": null,
+                    "hidden": true,
+                    "disabled": false,
+                    "live": false,
+                    "rules": []
+                }
+            ],
+            "infolist": [
+                {
+                    "type": "text_entry",
+                    "name": "name",
+                    "label": "Name",
+                    "helperText": null,
+                    "hidden": false,
+                    "disabled": false,
+                    "live": false,
+                    "rules": []
+                },
+                {
+                    "type": "badge_entry",
+                    "name": "status",
+                    "label": "Status",
+                    "helperText": null,
+                    "hidden": false,
+                    "disabled": false,
+                    "live": false,
+                    "rules": []
+                },
+                {
+                    "type": "text_entry",
+                    "name": "company.name",
+                    "label": "Name",
+                    "helperText": null,
+                    "hidden": false,
+                    "disabled": false,
+                    "live": false,
+                    "rules": []
+                },
+                {
+                    "type": "text_entry",
+                    "name": "infolist_only_note",
+                    "label": "Infolist only note",
+                    "helperText": null,
+                    "hidden": false,
+                    "disabled": false,
+                    "live": false,
+                    "rules": []
+                },
+                {
+                    "type": "rich_entry",
+                    "name": "body_html",
+                    "label": "Body html",
+                    "helperText": null,
+                    "hidden": false,
+                    "disabled": false,
+                    "live": false,
+                    "rules": []
+                }
+            ],
+            "group": "Content"
+        }
+    ]
+}

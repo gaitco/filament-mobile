@@ -18,7 +18,6 @@ use Gait\FilamentMobile\Tests\Fixtures\Resources\BannerResource;
  * `name` — the contract rule that a relation row is keyed by the RELATED
  * model's route key, never assumed `id`. Do not "fix" the missing id.
  */
-const RELATION_SNAPSHOT = __DIR__ . '/../../../../contract/relation-list.json';
 
 it('matches the committed relation-list contract snapshot', function () {
     // Same idiom RelationEndpointTest uses: the endpoint's authorization
@@ -46,9 +45,9 @@ it('matches the committed relation-list contract snapshot', function () {
     ) . "\n";
 
     if (getenv('UPDATE_SNAPSHOTS') === '1') {
-        file_put_contents(RELATION_SNAPSHOT, $json);
+        file_put_contents(contractPath('relation-list.json'), $json);
     }
 
-    expect(RELATION_SNAPSHOT)->toBeReadableFile()
-        ->and($json)->toBe(file_get_contents(RELATION_SNAPSHOT));
+    expect(contractPath('relation-list.json'))->toBeReadableFile()
+        ->and($json)->toBe(file_get_contents(contractPath('relation-list.json')));
 });

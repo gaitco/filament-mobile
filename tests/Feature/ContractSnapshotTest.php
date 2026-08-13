@@ -9,7 +9,6 @@ use Gait\FilamentMobile\ResourceRegistry;
 // Second golden file, not a rewrite of contract/panel.json. That one is P0's
 // hand-written example covering every v1 shape; this one is what Laravel
 // actually emits from real resources. Regenerate with UPDATE_SNAPSHOTS=1.
-const SNAPSHOT = __DIR__ . '/../../../../contract/laravel-panel.json';
 
 function snapshotDocument(): array
 {
@@ -23,11 +22,11 @@ it('matches the committed contract snapshot', function () {
     ) . "\n";
 
     if (getenv('UPDATE_SNAPSHOTS') === '1') {
-        file_put_contents(SNAPSHOT, $json);
+        file_put_contents(contractPath('laravel-panel.json'), $json);
     }
 
-    expect(SNAPSHOT)->toBeReadableFile()
-        ->and($json)->toBe(file_get_contents(SNAPSHOT));
+    expect(contractPath('laravel-panel.json'))->toBeReadableFile()
+        ->and($json)->toBe(file_get_contents(contractPath('laravel-panel.json')));
 });
 
 /**

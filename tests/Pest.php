@@ -10,6 +10,42 @@ use Gait\FilamentMobile\Tests\Fixtures\Models\User;
 uses(Gait\FilamentMobile\Tests\TestCase::class)->in('Unit', 'Feature');
 
 /**
+ * A shared contract golden, found wherever `contract/` happens to sit.
+ *
+ * Searched UPWARD rather than hardcoded as `__DIR__ . '/../../../../contract'`,
+ * because this package is tested from two different depths: in the monorepo it
+ * lives at `laravel/filament-mobile/` and the goldens are four levels up at the
+ * repo root, while in the public mirror the package IS the repo root and they
+ * sit one level up from `tests/`. A fixed depth resolves in one layout and
+ * silently fails in the other — and CI now runs in the mirror, because a public
+ * repo's Actions minutes are free (see this package's own
+ * `.github/workflows/ci.yml`).
+ *
+ * Throws rather than skipping: a missing golden means the snapshot tests are not
+ * running, and a green suite that quietly stopped checking the wire format is
+ * the exact failure this project has already shipped more than once.
+ */
+function contractPath(string $name): string
+{
+    $dir = __DIR__;
+
+    // Six is the monorepo's four plus slack; the loop ends at the filesystem
+    // root regardless, since dirname('/') is '/'.
+    for ($i = 0; $i < 6; $i++) {
+        if (is_file($dir . '/contract/' . $name)) {
+            return $dir . '/contract/' . $name;
+        }
+
+        $dir = dirname($dir);
+    }
+
+    throw new RuntimeException(
+        "contract/{$name} not found in any directory above " . __DIR__
+        . ' — the shared goldens are missing, so the snapshot tests cannot run.',
+    );
+}
+
+/**
  * The same nested value with every object's keys sorted, for comparing
  * anything that has been through a JSON column.
  *

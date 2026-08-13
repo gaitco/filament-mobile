@@ -1,0 +1,55 @@
+{
+    "widgets": [
+        {
+            "type": "stats",
+            "heading": "Store overview",
+            "description": "Orders at a glance",
+            "stats": [
+                {
+                    "label": "Orders this week",
+                    "value": "1340",
+                    "description": "12% increase",
+                    "descriptionIcon": "heroicon-m-arrow-trending-up",
+                    "color": "success",
+                    "chart": [
+                        7,
+                        12,
+                        9,
+                        15,
+                        22
+                    ]
+                },
+                {
+                    "label": "Refunds",
+                    "value": "3",
+                    "description": null,
+                    "descriptionIcon": null,
+                    "color": null,
+                    "chart": null
+                }
+            ]
+        },
+        {
+            "type": "chart",
+            "chartType": "line",
+            "heading": "Revenue",
+            "description": null,
+            "labels": [
+                "Jan",
+                "Feb",
+                "Mar"
+            ],
+            "datasets": [
+                {
+                    "label": "Revenue",
+                    "data": [
+                        120,
+                        340,
+                        210
+                    ]
+                }
+            ]
+        }
+    ],
+    "direction": "ltr"
+}
