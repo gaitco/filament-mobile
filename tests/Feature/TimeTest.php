@@ -40,6 +40,17 @@ function timeNode(string $name): array
             ->minDate(Carbon\Carbon::parse('2026-01-01 09:00')),
         TimePicker::make('exploding_time')
             ->minDate(fn () => throw new RuntimeException('boom')),
+        // P13 Task 1: every step configured away from the vendor default of
+        // 1, so each key has to prove it publishes its own accessor.
+        TimePicker::make('stepped_slot')
+            ->hoursStep(2)
+            ->minutesStep(15)
+            ->secondsStep(30),
+        // One step closure throws while a sibling stays configured: the
+        // guarded reader degrades the ONE key, never the field.
+        TimePicker::make('exploding_step')
+            ->hoursStep(4)
+            ->minutesStep(fn () => throw new RuntimeException('boom')),
     ], 'TestResource');
 
     foreach ($nodes as $node) {
@@ -87,4 +98,32 @@ it('publishes seconds from the time picker itself', function () {
 
 it('degrades a throwing time bound to no bound, not a failed document', function () {
     expect(timeNode('exploding_time')['config']['minDate'])->toBeNull();
+});
+
+it('publishes the steps a time picker configured, each from its own accessor', function () {
+    // getHoursStep()/getMinutesStep()/getSecondsStep() are closure-backed
+    // ints defaulting to 1 (measured in vendor DateTimePicker) — publish
+    // only beats the default, so an absent key MEANS 1.
+    expect(timeNode('stepped_slot')['config'])->toMatchArray([
+        'hoursStep' => 2,
+        'minutesStep' => 15,
+        'secondsStep' => 30,
+    ]);
+});
+
+it('publishes no step keys on a time picker left at the vendor default of 1', function () {
+    // Sparse config: `closes_at` is never stepped, so all three keys must be
+    // absent — not published as 1.
+    $config = timeNode('closes_at')['config'];
+
+    expect($config)->not->toHaveKey('hoursStep')
+        ->and($config)->not->toHaveKey('minutesStep')
+        ->and($config)->not->toHaveKey('secondsStep');
+});
+
+it('degrades a throwing step closure to absence, never a failed document', function () {
+    $config = timeNode('exploding_step')['config'];
+
+    expect($config)->not->toHaveKey('minutesStep')
+        ->and($config['hoursStep'])->toBe(4);
 });

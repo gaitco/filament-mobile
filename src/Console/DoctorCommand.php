@@ -17,7 +17,6 @@ use Gait\FilamentMobile\Introspection\WalkWarnings;
 use Gait\FilamentMobile\MobileResource;
 use Gait\FilamentMobile\PanelSchemaBuilder;
 use Gait\FilamentMobile\ResourceRegistry;
-use Gait\FilamentMobile\Upload\UploadFieldResolver;
 use Gait\FilamentMobile\Validation\RuleExtractor;
 use Illuminate\Console\Command;
 use Illuminate\Contracts\Auth\Authenticatable;
@@ -69,7 +68,6 @@ final class DoctorCommand extends Command
         $unresolvable = $this->unresolvableCardPaths($mobile);
         $actionProblems = $this->actionProblems($mobile);
         $widgetProblems = $this->widgetProblems();
-        $multiFile = $this->multiFileFields($mobile);
         $repeaterProblems = $this->repeaterProblems($registry, $builder, $mobile, $panel);
         $relationRefusals = $this->relationRefusals($registry);
         $proseCards = $this->proseOnlyCardFields($registry, $mobile, $panel);
@@ -80,7 +78,6 @@ final class DoctorCommand extends Command
         $this->section('Unresolvable card field paths', $unresolvable);
         $this->section('Actions', $actionProblems);
         $this->section('Widgets', $widgetProblems);
-        $this->section('Multi-file uploads', $multiFile);
         $this->section('Repeaters', $repeaterProblems);
         $this->section('Relations', $relationRefusals);
         $this->section('Rich text on cards', $proseCards);
@@ -421,39 +418,7 @@ final class DoctorCommand extends Command
     }
 
     /**
-     * Section 7. `FileUpload::multiple()` fields: /schema always publishes
-     * these `readOnly: true` and the upload endpoint always refuses them —
-     * correct for this slice, but silent. Nothing goes to
-     * `PanelSchemaBuilder::warnings()` for a multi-file field the way a
-     * throwing `acceptedFileTypes()`/`maxSize()` does (see
-     * SchemaWalker::config()), because there is nothing wrong with the
-     * panel's declaration, only with this slice's support for it — so
-     * without this section a resource author has no way to learn "this field
-     * cannot be edited from a phone" short of reading the wire payload.
-     *
-     * Informational, like unresolvableCardPaths() above: a panel legitimately
-     * has multi-file fields, and this slice choosing not to support them yet
-     * must not fail CI over it. Not folded into $actionable in handle().
-     *
-     * @param  array<class-string, MobileResource>  $mobile
-     * @return list<string>
-     */
-    private function multiFileFields(array $mobile): array
-    {
-        $lines = [];
-
-        foreach ($mobile as $class => $resource) {
-            foreach ((new UploadFieldResolver($class))->multipleFieldNames() as $field) {
-                $lines[] = class_basename($class) . '.' . $field
-                    . ': FileUpload::multiple() is unsupported this slice — published read-only, refused by the upload endpoint';
-            }
-        }
-
-        return $lines;
-    }
-
-    /**
-     * Section 8. Three repeater shapes this slice legitimately cannot
+     * Section 7. Three repeater shapes this slice legitimately cannot
      * support — a panel legitimately has these, and the slice simply does
      * not support them (design spec, "Known weaknesses, stated now"):
      *
@@ -473,7 +438,7 @@ final class DoctorCommand extends Command
      * relationship shape still reported is the gate that cannot answer — a
      * throwing `relationship()` closure, which stays refused, fail closed.
      *
-     * Informational, like multiFileFields() above: a panel author is not
+     * Informational: a panel author is not
      * surprised, but nothing here is wrong with the panel's declaration,
      * only with this slice's support for it. Never folded into $actionable
      * in handle().
@@ -616,7 +581,7 @@ final class DoctorCommand extends Command
     }
 
     /**
-     * Section 9. Relation managers `RelationDiscovery` refused, and why —
+     * Section 8. Relation managers `RelationDiscovery` refused, and why —
      * the only channel that explains why a relation manager the panel
      * declares never reaches `/schema`. Every entry `getRelations()`
      * returns ends up here or in a published relation; nothing is silently
@@ -716,7 +681,7 @@ final class DoctorCommand extends Command
     }
 
     /**
-     * Section 10. A card slot bound to a column that is rich ONLY because one
+     * Section 9. A card slot bound to a column that is rich ONLY because one
      * infolist entry calls `->prose()`.
      *
      * `->prose()` is a declaration about that one entry; `HasRichContent` is a
@@ -729,7 +694,7 @@ final class DoctorCommand extends Command
      *
      * Nothing else tells the panel author why one card slot came out clean and
      * the one beside it did not: `/schema` publishes the card's field paths,
-     * not which of them convert. Informational, like `multiFileFields()` — the
+     * not which of them convert. Informational — the
      * declaration is legal, this slice simply cannot honour it on a card — so
      * it is never folded into `$actionable` in handle().
      *

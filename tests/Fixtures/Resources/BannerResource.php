@@ -9,12 +9,15 @@ use Filament\Forms\Components\CheckboxList;
 use Filament\Forms\Components\FileUpload;
 use Filament\Forms\Components\Hidden;
 use Filament\Forms\Components\KeyValue;
+use Filament\Forms\Components\Placeholder;
 use Filament\Forms\Components\Radio;
 use Filament\Forms\Components\Repeater;
 use Filament\Forms\Components\RichEditor;
 use Filament\Forms\Components\Select;
+use Filament\Forms\Components\Slider;
 use Filament\Forms\Components\TagsInput;
 use Filament\Forms\Components\TextInput;
+use Filament\Forms\Components\ToggleButtons;
 use Filament\Infolists\Components\TextEntry;
 use Filament\Resources\Resource;
 use Filament\Schemas\Components\Section;
@@ -51,6 +54,12 @@ class BannerResource extends Resource
             ->searchable(['name'])
             ->sorts(['created_at' => 'Newest', 'name' => 'Name'])
             ->defaultSort('created_at', 'desc')
+            // P11: the golden snapshot's one relation carries the full
+            // per-relation declaration surface, so the published node and the
+            // endpoint are exercised end-to-end against real server output.
+            ->relationSearchable('tags', ['name'])
+            ->relationSorts('tags', ['name' => 'Name'])
+            ->relationDefaultSort('tags', 'name')
             ->actions([
                 'approve', 'archive', 'publish', 'reject', 'explode', 'halting',
                 // Presentation getters that throw — ActionResolver::serialise()
@@ -586,10 +595,21 @@ class BannerResource extends Resource
                 ->disk('public')
                 ->maxSize(1024)
                 ->acceptedFileTypes(['image/png', 'image/jpeg']),
-            // Multiple stays refused this slice — published readOnly and
-            // rejected by the endpoint, so nothing looks editable that is
-            // not.
+            // P12: a plain multiple field — supported now, a List<String> of
+            // stored paths on the wire. No declared constraints, so its
+            // published config carries `multiple: true` and no hints.
             FileUpload::make('gallery')->multiple(),
+            // The fully-declared multiple field: accept/maxSize publish as
+            // per-file hints (enforced per upload, unchanged), maxFiles/
+            // minFiles publish as count hints and are enforced at write time
+            // as array max/min rules.
+            FileUpload::make('attachments')
+                ->multiple()
+                ->disk('public')
+                ->maxSize(1024)
+                ->acceptedFileTypes(['image/png', 'image/jpeg'])
+                ->maxFiles(3)
+                ->minFiles(1),
             // A disabled upload must refuse exactly like a disabled field
             // anywhere else in this package.
             FileUpload::make('locked_file')->disabled(),
@@ -717,6 +737,42 @@ class BannerResource extends Resource
             TextInput::make('featured_note')
                 ->visible(fn (Get $get) => is_array($get('options'))
                     && ($get('options')['featured'] ?? false) === true),
+            // P10 Task 1: the walker's first ToggleButtons. Same
+            // Concerns\HasOptions trait and getOptions() as Select and Radio
+            // (measured in vendor), so config() reads it through the same
+            // option branch — and like a radio it never gets an `optionsUrl`,
+            // because the control has no search affordance to post one to.
+            // `config.multiple` is always present: single is a scalar on the
+            // wire, multiple a List — the select/multiselect split.
+            ToggleButtons::make('toggle_status')->options([
+                'draft' => 'Draft',
+                'live' => 'Live',
+            ]),
+            ToggleButtons::make('toggle_flags')->multiple()->options([
+                'featured' => 'Featured',
+                'pinned' => 'Pinned',
+            ]),
+            // The boolean() preset needs no special-casing: it publishes
+            // options 1/0 and the value travels as declared.
+            ToggleButtons::make('toggle_active')->boolean(),
+            // P10 Task 2: the walker's first Slider pair. Slider::setUp()
+            // force-registers `required` (measured in vendor), and a required
+            // field on this resource would 422 every pre-existing create
+            // test that posts only name/body_html — so the fixtures relax it
+            // and the publication of `required` is pinned on a bare component
+            // in SliderTest instead. `rating` is the single shape (scalar on
+            // the wire); `price_range` is the range shape, detected from its
+            // array default on the empty /schema snapshot.
+            Slider::make('rating')->range(0, 10)->step(1)->required(false),
+            Slider::make('price_range')->range(0, 100)->step(5)
+                ->default([20, 40])
+                ->required(false),
+            // P10 Task 3: a Placeholder maps to the existing `text_entry`
+            // type. It extends Infolists TextEntry (deprecated alias), so it
+            // carries no writable state: isDehydrated() is a hard false and
+            // RuleExtractor admits no rule for it — a submitted value can
+            // never reach a column. Which is why it deliberately has none.
+            Placeholder::make('delivery_note')->content('Ships within two working days.'),
         ]);
     }
 

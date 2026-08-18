@@ -67,8 +67,13 @@ final class UploadFieldResolver
         }
 
         try {
-            // Multiple is deferred; disabled refuses like any other field.
-            if ($component->isMultiple() || $component->isDisabled()) {
+            // Disabled refuses like any other field. Multiple is NOT a
+            // refusal since P12 — the endpoint still takes one file per
+            // request and the client loops; a multiplicity gate that THROWS
+            // is refused below instead, through the writable allow-set
+            // (RuleExtractor withholds its rule on the same throw), so this
+            // resolver and the write path cannot disagree about it.
+            if ($component->isDisabled()) {
                 return null;
             }
         } catch (Throwable) {
@@ -80,61 +85,6 @@ final class UploadFieldResolver
         return in_array($field, WritableNames::of($components), true)
             ? $component
             : null;
-    }
-
-    /**
-     * Every `FileUpload::multiple()` reachable in the resource's create form —
-     * the fields `resolve()` above always refuses and SchemaWalker always
-     * publishes `readOnly: true`, silently: no warning reaches doctor's other
-     * sections, because nothing is wrong with the panel's declaration, only
-     * with this slice's support for it. Doctor is the one place this needs to
-     * be loud, so it walks the same component tree `find()` does rather than
-     * re-deriving it.
-     *
-     * @return list<string> field names
-     */
-    public function multipleFieldNames(): array
-    {
-        try {
-            $components = $this->components(null);
-        } catch (Throwable) {
-            // A form that cannot be built cannot vouch for anything — same
-            // fail-closed rule as resolve() above.
-            return [];
-        }
-
-        return $this->collectMultiple($components);
-    }
-
-    /**
-     * @param  iterable<mixed>  $components
-     * @return list<string>
-     */
-    private function collectMultiple(iterable $components): array
-    {
-        $names = [];
-
-        foreach ($components as $component) {
-            if (! is_object($component)) {
-                continue;
-            }
-
-            if ($component instanceof BaseFileUpload && method_exists($component, 'getName')) {
-                try {
-                    if ($component->isMultiple()) {
-                        $names[] = $component->getName();
-                    }
-                } catch (Throwable) {
-                    // A multiplicity that cannot be read is not one we can
-                    // report as multiple — same silence-over-false-positive
-                    // rule `resolves()` in DoctorCommand applies elsewhere.
-                }
-            }
-
-            $names = [...$names, ...$this->collectMultiple(ChildComponents::of($component))];
-        }
-
-        return $names;
     }
 
     /**

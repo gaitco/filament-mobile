@@ -178,6 +178,15 @@ final class PanelSchemaBuilder
                 'label' => $relation['label'],
                 'card' => $relation['card']->toArray(),
                 'recordKey' => $this->recordKeyFor($model, $relation['key']),
+                // P11: the resource block's own shapes, one level down and
+                // always present — a client branches on absence only for a
+                // server predating P11. Host-declared, like the resource
+                // level: enabled means the host named columns, never that a
+                // table was introspected.
+                'search' => [
+                    'enabled' => $mobile->getRelationSearchable($relation['key']) !== [],
+                ],
+                'sorts' => $mobile->relationSortsToArray($relation['key']),
             ];
 
             // P9: the child resource's key, present only when discovery

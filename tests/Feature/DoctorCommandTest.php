@@ -146,22 +146,21 @@ it('reports a configured widget that is neither stats nor chart', function () {
         ->assertExitCode(1);
 });
 
-it('reports a FileUpload::multiple() field as unsupported this slice', function () {
-    // BannerResource declares `gallery` as FileUpload::make('gallery')->multiple().
-    // Assert on wording unique to this section — 'FileUpload::multiple()'
-    // appears nowhere else doctor prints for this fixture set, unlike the
-    // bare 'ghost' the 'no such action' test above had to guard against for
-    // the same reason (DriftResource's unrelated `ghost.name` path already
-    // contained it).
+it('no longer reports a FileUpload::multiple() field — supported since P12', function () {
+    // BannerResource declares `gallery` and `attachments` as multiple file
+    // fields, and both are fully served now: published editable, admitted to
+    // the write path, accepted by the upload endpoint. A stale "unsupported
+    // this slice" line would tell the panel author to remove a control that
+    // works — the negative assertion is the point.
     $this->artisan('filament-mobile:doctor')
-        ->expectsOutputToContain('BannerResource.gallery: FileUpload::multiple()');
+        ->doesntExpectOutputToContain('FileUpload::multiple()');
 });
 
-it('does not fail CI over a multi-file field alone — it is informational', function () {
+it('stays green over a multi-file field alone — multi-file is supported, not just tolerated', function () {
     config()->set('filament-mobile.resources', [MultiFileResource::class]);
 
     $this->artisan('filament-mobile:doctor')
-        ->expectsOutputToContain('MultiFileResource.photos: FileUpload::multiple()')
+        ->doesntExpectOutputToContain('FileUpload::multiple()')
         ->assertExitCode(0);
 });
 

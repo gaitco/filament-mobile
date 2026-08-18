@@ -48,15 +48,14 @@ it('names a single-file upload field', function () {
     ]))->toBe(['name', 'avatar']);
 });
 
-it('does not name a multiple-file field', function () {
-    // The walker publishes it read-only and the extractor withholds its rule,
-    // so the write never accepts it — and a value it never accepts is a value
-    // it must not evaluate gates against either. This slice (P6a) has nowhere
-    // to save more than one path per column.
+it('names a multiple-file field, since P12', function () {
+    // A multiple field's value is a List<String> of stored paths the write
+    // path saves wholesale, so its name is as writable as any other leaf's —
+    // and the walker publishes it editable off the same admission.
     expect(WritableNames::of([
         TextInput::make('name'),
         FileUpload::make('gallery')->multiple(),
-    ]))->toBe(['name']);
+    ]))->toBe(['name', 'gallery']);
 });
 
 it('does not name a file field whose multiple() gate throws', function () {

@@ -211,32 +211,23 @@ final class RuleExtractor
             return [];
         }
 
-        // Multiple-file stays withheld: this slice (P6a) has nowhere to save
-        // more than one path per column, and a client that submitted the key
-        // anyway — by accident or on purpose — would otherwise overwrite or
-        // *clear* a stored value with whatever scalar it sent. Withholding
-        // the rule is what drops it: the rules array is also the
-        // mass-assignment whitelist (only a validated key reaches create() or
-        // update()), so no rule means no key, in store() and update() alike.
-        // A second filter applied per controller method could drift between
-        // the two; this cannot.
+        // A file field — single OR multiple — carries a rule like any other
+        // leaf: its stored value is a PATH STRING (single) or a List<String>
+        // of path strings (multiple, since P12 — saved wholesale like a
+        // repeater's rows), never bytes. Bytes travel through
+        // Upload\UploadFieldResolver and the upload endpoint, which hand
+        // back a path the ordinary write path then saves. `getName()` below
+        // still gates on isNotSaved(), so a disabled or non-dehydrating file
+        // field is withheld the same way any other field is.
         //
-        // A SINGLE-file field now carries a rule like any other leaf: its
-        // stored value is a PATH STRING, never bytes — bytes travel through
-        // Upload\UploadFieldResolver and the upload endpoint, which hand back
-        // a path the ordinary write path then saves exactly like any other
-        // string column. `getName()` below still gates on isNotSaved(), so a
-        // disabled or non-dehydrating single-file field is withheld the same
-        // way any other field is.
-        //
-        // `!== false`, not `=== true`: the rule is admitted only when
-        // isMultiple() ANSWERS single. A throw (read() returns null) is
+        // `is_bool`, not `!== false`: the rule is admitted when isMultiple()
+        // ANSWERS, either way. A throw (read() returns null) is still
         // withheld, because admitting on a throw fails OPEN — the field
         // enters WritableNames and PUT will write or clear its column while
         // UploadFieldResolver refuses its every upload. The walker's
-        // isMultipleFile() and the resolver give the same closed answer on
-        // the same throw, so all three agree.
-        if ($type === 'file' && self::read($component, 'isMultiple') !== false) {
+        // fileMultiplicity() and the resolver give the same closed answer
+        // on the same throw, so all three still agree.
+        if ($type === 'file' && ! is_bool(self::read($component, 'isMultiple'))) {
             return [];
         }
 
@@ -352,10 +343,21 @@ final class RuleExtractor
             // wildcard support, so this name must never enter WritableNames
             // — only the whole-array name above may.
             foreach (self::leavesOf(ChildComponents::of($component)) as $childName => $childEntry) {
-                $leaves["{$name}.*.{$childName}"] = [
+                $prefixed = [
                     'component' => $childEntry['component'],
                     'writable' => false,
                 ];
+
+                // A child's already-resolved rules (the seeded per-element
+                // `string` on a tags or multiple-file `{$name}.*` entry)
+                // travel WITH the prefix — re-deriving them from the
+                // component in rulesFor() would hand the per-element name
+                // the field's own CONTAINER rules.
+                if (isset($childEntry['rules'])) {
+                    $prefixed['rules'] = $childEntry['rules'];
+                }
+
+                $leaves["{$name}.*.{$childName}"] = $prefixed;
             }
 
             return $leaves;
@@ -401,13 +403,25 @@ final class RuleExtractor
         // was false. `max:20` on an array means COUNT ≤ 20, so even a
         // declared nested rule let the map through.
         //
+        // A MULTIPLE file field (P12) gets the same seed for the same
+        // reason: its wire value is a `List<String>` of stored paths, and
+        // the container rules alone would let a crafted `[1, 2]` persist as
+        // a list of ints behind a 200. Per-FILE constraints (mimetypes,
+        // size KB) deliberately do NOT travel as `name.*` rules — Filament's
+        // own flow applies those to uploaded files, and this contract
+        // enforces them at upload time instead; what remains here is the
+        // element TYPE.
+        //
         // Seeded, not appended: a panel's own nested rules follow it, so
         // `labels.*` is `['string', 'max:20']` and both apply. `in_array`
         // rather than a dedupe over the whole list, because a nested rule
         // may be a Rule OBJECT and `array_unique()`'s default comparison
         // stringifies — a strict membership check is the only one that is
         // safe for every element a panel may declare.
-        $nested = $type === 'tags' && ! in_array('string', $nested, true)
+        $seedsStringElement = $type === 'tags'
+            || ($type === 'file' && self::read($component, 'isMultiple') === true);
+
+        $nested = $seedsStringElement && ! in_array('string', $nested, true)
             ? ['string', ...$nested]
             : $nested;
 
@@ -570,8 +584,11 @@ final class RuleExtractor
                 return self::labelOf($component);
             }
 
-            // Multiple-file: rule withheld, as at top level.
-            if ($type === 'file' && self::read($component, 'isMultiple') !== false) {
+            // A file field whose multiplicity cannot be READ (a throwing
+            // isMultiple()) keeps its rule withheld, as at top level — the
+            // one file shape P12 did not admit. A multiple file child whose
+            // gate ANSWERS round-trips like any other admitted child.
+            if ($type === 'file' && ! is_bool(self::read($component, 'isMultiple'))) {
                 return self::labelOf($component);
             }
 
@@ -735,6 +752,99 @@ final class RuleExtractor
         // needed.
         if (ComponentTypeMap::for($component) === 'keyvalue') {
             $rules = ['array'];
+        }
+
+        // P12: a MULTIPLE file field bounds an ARRAY of path strings, so it
+        // is shaped like the repeater above rather than like an ordinary
+        // field — `array` + `list` on the container (a crafted scalar or
+        // string-keyed map is a contract violation, never a coercion), and
+        // `min`/`max` derived from minFiles()/maxFiles(), where they mean
+        // FILE COUNT — Filament's own getValidationRules() shapes a
+        // multiple field identically (verified in vendor). The per-element
+        // `string` arrives through childrenOf()'s `{$name}.*` machinery;
+        // per-file mimetypes/size are enforced at upload time instead.
+        //
+        // Early return, like the repeater: the generic tail reads accessors
+        // (getMaxLength() and friends) a file component does not have, and
+        // count bounds that cannot be read degrade to no rule — the same
+        // degrade-on-throw shape the repeater's min/max items already take.
+        if (ComponentTypeMap::for($component) === 'file'
+            && self::read($component, 'isMultiple') === true) {
+            $rules = ['array', 'list'];
+
+            if (self::read($component, 'isRequired') === true) {
+                $rules[] = 'required';
+            }
+
+            $max = self::read($component, 'getMaxFiles');
+
+            if (is_int($max)) {
+                $rules[] = "max:{$max}";
+            }
+
+            $min = self::read($component, 'getMinFiles');
+
+            if (is_int($min)) {
+                $rules[] = "min:{$min}";
+            }
+
+            return $rules;
+        }
+
+        // P10: a slider's bounds are force-registered on the COMPONENT
+        // (Slider::setUp(), measured in vendor), not declared through the
+        // accessors this method reads — `numeric`/`min:`/`max:` live behind
+        // rule() closures keyed off the raw state, so nothing above re-derives
+        // them and an out-of-range write would sail through where the web
+        // panel 422s. Re-derived here from the same accessors the walker's
+        // published hints read, so the two cannot drift.
+        //
+        // The RANGE half needs none of this: with an array in the raw state,
+        // isMultiple() answers true and Filament's own nested-recursive rules
+        // (numeric/min:/max:/multiple_of: per element) already arrive through
+        // childrenOf()'s `{$name}.*` machinery — Slider implements the same
+        // HasNestedRecursiveValidationRules contract P7's TagsInput handling
+        // reads. What the range shape still needs here is the CONTAINER rule:
+        // `array` + `list`, the tags shape, so a crafted scalar or map can
+        // never pose as the two-element List the contract declares. A scalar
+        // submission flips isMultiple() false and gets the single bounds
+        // instead — exactly Filament's own state-conditioned rule selection,
+        // so mobile and web answer the same payload identically.
+        if (ComponentTypeMap::for($component) === 'slider') {
+            if (self::read($component, 'isMultiple') === true) {
+                $rules = ['array', 'list'];
+            } else {
+                $rules[] = 'numeric';
+
+                // The WithPadding variant first: rangePadding folds into the
+                // enforced bound (vendor: the registered rules are built from
+                // getMinValueWithPadding()/getMaxValueWithPadding()), and the
+                // plain accessor is the fallback for a Filament line that
+                // predates it.
+                $min = self::read($component, 'getMinValueWithPadding')
+                    ?? self::read($component, 'getMinValue');
+
+                if (is_int($min) || is_float($min)) {
+                    $rules[] = "min:{$min}";
+                }
+
+                $max = self::read($component, 'getMaxValueWithPadding')
+                    ?? self::read($component, 'getMaxValue');
+
+                if (is_int($max) || is_float($max)) {
+                    $rules[] = "max:{$max}";
+                }
+
+                // `integer` when the step is exactly 1, `multiple_of:`
+                // otherwise — vendor's own mapping, strict comparison and
+                // all. A string or null step registers nothing, matching the
+                // walker's "absence means any step".
+                $step = self::read($component, 'getStep');
+
+                if (is_int($step) || is_float($step)) {
+                    $rules[] = $step === 1 ? 'integer' : "multiple_of:{$step}";
+                }
+            }
         }
 
         if (self::read($component, 'isRequired') === true) {

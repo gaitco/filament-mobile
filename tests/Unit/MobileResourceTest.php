@@ -111,6 +111,110 @@ it('records searchable columns in declaration order', function () {
         ->toBe(['name', 'slug']);
 });
 
+it('stores searchable columns per relation, independently of each other and the resource', function () {
+    $resource = MobileResource::make()
+        ->searchable(['title'])
+        ->relationSearchable('tags', ['name', 'slug'])
+        ->relationSearchable('banners', ['name']);
+
+    expect($resource->getRelationSearchable('tags'))->toBe(['name', 'slug'])
+        ->and($resource->getRelationSearchable('banners'))->toBe(['name'])
+        ->and($resource->getRelationSearchable('comments'))->toBe([])
+        ->and($resource->getSearchable())->toBe(['title']);
+});
+
+it('emits the contract sorts shape per relation with the default flagged', function () {
+    $resource = MobileResource::make()
+        ->relationSorts('tags', ['name' => 'Name', 'created_at' => 'Created'])
+        ->relationDefaultSort('tags', 'name');
+
+    expect($resource->relationSortsToArray('tags'))->toBe([
+        ['key' => 'name', 'label' => 'Name', 'direction' => 'asc', 'default' => true],
+        ['key' => 'created_at', 'label' => 'Created', 'direction' => 'asc'],
+    ]);
+});
+
+it('emits empty sorts for a relation nothing declared', function () {
+    expect(MobileResource::make()->relationSortsToArray('tags'))->toBe([]);
+});
+
+it('keeps relation sorts independent of the resource-level sorts', function () {
+    $resource = MobileResource::make()
+        ->sorts(['name' => 'Name'])
+        ->defaultSort('name')
+        ->relationSorts('tags', ['weight' => 'Weight']);
+
+    expect($resource->relationSortsToArray('tags'))->toBe([
+        ['key' => 'weight', 'label' => 'Weight', 'direction' => 'asc'],
+    ])->and($resource->sortsToArray())->toBe([
+        ['key' => 'name', 'label' => 'Name', 'direction' => 'asc', 'default' => true],
+    ]);
+});
+
+it('rejects a relation default sort key the relation does not declare', function () {
+    // Declared on the RESOURCE and on ANOTHER relation, still undeclared on
+    // this one — the refusal is keyed by relation, or a typo'd relation name
+    // would silently borrow the resource's sorts.
+    expect(fn () => MobileResource::make()
+        ->sorts(['name' => 'Name'])
+        ->relationSorts('banners', ['name' => 'Name'])
+        ->relationSorts('tags', ['weight' => 'Weight'])
+        ->relationDefaultSort('tags', 'name'))
+        ->toThrow(InvalidArgumentException::class);
+});
+
+it('normalises a relation default sort direction to lower case and rejects anything else', function () {
+    $resource = MobileResource::make()
+        ->relationSorts('tags', ['name' => 'Name'])
+        ->relationDefaultSort('tags', 'name', 'DESC');
+
+    expect($resource->getRelationDefaultSortDirection('tags'))->toBe('desc')
+        ->and($resource->relationSortsToArray('tags')[0]['direction'])->toBe('desc');
+
+    expect(fn () => MobileResource::make()
+        ->relationSorts('tags', ['name' => 'Name'])
+        ->relationDefaultSort('tags', 'name', 'descending'))
+        ->toThrow(InvalidArgumentException::class);
+});
+
+it('drops a relation default a later relationSorts() no longer declares', function () {
+    // Same dangling-default ruling as sorts() after defaultSort(): the wire
+    // would emit no `default` flag while the endpoint still ordered by the
+    // vanished key.
+    $resource = MobileResource::make()
+        ->relationSorts('tags', ['name' => 'Name'])
+        ->relationDefaultSort('tags', 'name', 'desc')
+        ->relationSorts('tags', ['weight' => 'Weight']);
+
+    expect($resource->getRelationDefaultSortKey('tags'))->toBeNull()
+        ->and($resource->getRelationDefaultSortDirection('tags'))->toBe('asc')
+        ->and($resource->relationSortsToArray('tags'))->toBe([
+            ['key' => 'weight', 'label' => 'Weight', 'direction' => 'asc'],
+        ]);
+});
+
+it('answers the undeclared defaults for a relation nothing declared', function () {
+    $resource = MobileResource::make();
+
+    expect($resource->getRelationSearchable('tags'))->toBe([])
+        ->and($resource->getRelationSorts('tags'))->toBe([])
+        ->and($resource->getRelationDefaultSortKey('tags'))->toBeNull()
+        ->and($resource->getRelationDefaultSortDirection('tags'))->toBe('asc');
+});
+
+it('exposes the keys each relation declaration map was called with', function () {
+    // What RelationDiscovery checks against the relations the resource
+    // actually declares — the stray-key refusal relationCard() already has.
+    $resource = MobileResource::make()
+        ->relationSearchable('tags', ['name'])
+        ->relationSorts('banners', ['name' => 'Name'])
+        ->relationDefaultSort('banners', 'name');
+
+    expect($resource->getRelationSearchableKeys())->toBe(['tags'])
+        ->and($resource->getRelationSortsKeys())->toBe(['banners'])
+        ->and($resource->getRelationDefaultSortKeys())->toBe(['banners']);
+});
+
 it('declares no actions by default', function () {
     expect(MobileResource::make()->getActions())->toBe([]);
 });

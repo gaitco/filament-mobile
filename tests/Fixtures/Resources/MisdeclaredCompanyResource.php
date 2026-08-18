@@ -21,7 +21,8 @@ use Gait\FilamentMobile\Tests\Fixtures\Relations\BannersRelationManager;
  * - `bannerz` is a typo. Nothing on this resource is named that, so the
  *   declaration is inert and the derived card is used instead — silently,
  *   which is how a panel author spends an afternoon on a card that was never
- *   read.
+ *   read. P11 added three more maps the same typo can land in, and they are
+ *   refused and named the same way.
  *
  * Both are the panel author's own mistake, so `doctor` is where they belong.
  */
@@ -36,7 +37,10 @@ class MisdeclaredCompanyResource extends Resource
         return MobileResource::make()
             ->card(fn (MobileCard $card) => $card->title('name'))
             ->relationCard('banners', fn (MobileCard $card) => $card)
-            ->relationCard('bannerz', fn (MobileCard $card) => $card->title('name'));
+            ->relationCard('bannerz', fn (MobileCard $card) => $card->title('name'))
+            ->relationSearchable('bannerz', ['name'])
+            ->relationSorts('bannerz', ['name' => 'Name'])
+            ->relationDefaultSort('bannerz', 'name');
     }
 
     public static function getRelations(): array

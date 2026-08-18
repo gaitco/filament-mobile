@@ -149,7 +149,8 @@
                             "config": {
                                 "minDate": "09:00",
                                 "maxDate": "17:00",
-                                "seconds": false
+                                "seconds": false,
+                                "minutesStep": 15
                             }
                         },
                         {
@@ -180,6 +181,24 @@
                                 "minDate": "2026-01-01 09:00:00",
                                 "maxDate": null,
                                 "seconds": true
+                            }
+                        },
+                        {
+                            "type": "datetime",
+                            "name": "booked_at",
+                            "label": "Booked at",
+                            "helperText": null,
+                            "hidden": false,
+                            "disabled": false,
+                            "live": false,
+                            "rules": [],
+                            "config": {
+                                "minDate": null,
+                                "maxDate": null,
+                                "seconds": true,
+                                "hoursStep": 2,
+                                "minutesStep": 30,
+                                "secondsStep": 15
                             }
                         }
                     ]
@@ -422,7 +441,18 @@
                             "field": "name"
                         }
                     },
-                    "recordKey": "name"
+                    "recordKey": "name",
+                    "search": {
+                        "enabled": true
+                    },
+                    "sorts": [
+                        {
+                            "key": "name",
+                            "label": "Name",
+                            "direction": "asc",
+                            "default": true
+                        }
+                    ]
                 }
             ],
             "form": [
@@ -1047,7 +1077,8 @@
                             "live": false,
                             "rules": [],
                             "config": {
-                                "readOnly": false
+                                "readOnly": false,
+                                "multiple": false
                             }
                         }
                     ]
@@ -1096,7 +1127,8 @@
                     "live": false,
                     "rules": [],
                     "config": {
-                        "readOnly": false
+                        "readOnly": false,
+                        "multiple": false
                     }
                 },
                 {
@@ -1110,6 +1142,7 @@
                     "rules": [],
                     "config": {
                         "readOnly": false,
+                        "multiple": false,
                         "accept": [
                             "image/png",
                             "image/jpeg"
@@ -1126,9 +1159,30 @@
                     "disabled": false,
                     "live": false,
                     "rules": [],
-                    "writable": false,
                     "config": {
-                        "readOnly": true
+                        "readOnly": false,
+                        "multiple": true
+                    }
+                },
+                {
+                    "type": "file",
+                    "name": "attachments",
+                    "label": "Attachments",
+                    "helperText": null,
+                    "hidden": false,
+                    "disabled": false,
+                    "live": false,
+                    "rules": [],
+                    "config": {
+                        "readOnly": false,
+                        "multiple": true,
+                        "accept": [
+                            "image/png",
+                            "image/jpeg"
+                        ],
+                        "maxSize": 1024,
+                        "maxFiles": 3,
+                        "minFiles": 1
                     }
                 },
                 {
@@ -1141,7 +1195,8 @@
                     "live": false,
                     "rules": [],
                     "config": {
-                        "readOnly": false
+                        "readOnly": false,
+                        "multiple": false
                     }
                 },
                 {
@@ -1155,7 +1210,8 @@
                     "rules": [],
                     "writable": false,
                     "config": {
-                        "readOnly": false
+                        "readOnly": false,
+                        "multiple": false
                     }
                 },
                 {
@@ -1168,7 +1224,8 @@
                     "live": false,
                     "rules": [],
                     "config": {
-                        "readOnly": true
+                        "readOnly": true,
+                        "multiple": false
                     }
                 },
                 {
@@ -1181,7 +1238,8 @@
                     "live": false,
                     "rules": [],
                     "config": {
-                        "readOnly": true
+                        "readOnly": true,
+                        "multiple": false
                     }
                 },
                 {
@@ -1195,7 +1253,8 @@
                     "rules": [],
                     "writable": false,
                     "config": {
-                        "readOnly": true
+                        "readOnly": true,
+                        "multiple": true
                     }
                 },
                 {
@@ -1208,7 +1267,8 @@
                     "live": false,
                     "rules": [],
                     "config": {
-                        "readOnly": false
+                        "readOnly": false,
+                        "multiple": false
                     }
                 },
                 {
@@ -1549,6 +1609,140 @@
                     "label": "Featured note",
                     "helperText": null,
                     "hidden": true,
+                    "disabled": false,
+                    "live": false,
+                    "rules": []
+                },
+                {
+                    "type": "toggle_buttons",
+                    "name": "toggle_status",
+                    "label": "Toggle status",
+                    "helperText": null,
+                    "hidden": false,
+                    "disabled": false,
+                    "live": false,
+                    "rules": [],
+                    "config": {
+                        "multiple": false,
+                        "options": [
+                            {
+                                "value": "draft",
+                                "label": "Draft"
+                            },
+                            {
+                                "value": "live",
+                                "label": "Live"
+                            }
+                        ]
+                    }
+                },
+                {
+                    "type": "toggle_buttons",
+                    "name": "toggle_flags",
+                    "label": "Toggle flags",
+                    "helperText": null,
+                    "hidden": false,
+                    "disabled": false,
+                    "live": false,
+                    "rules": [],
+                    "config": {
+                        "multiple": true,
+                        "options": [
+                            {
+                                "value": "featured",
+                                "label": "Featured"
+                            },
+                            {
+                                "value": "pinned",
+                                "label": "Pinned"
+                            }
+                        ]
+                    }
+                },
+                {
+                    "type": "toggle_buttons",
+                    "name": "toggle_active",
+                    "label": "Toggle active",
+                    "helperText": null,
+                    "hidden": false,
+                    "disabled": false,
+                    "live": false,
+                    "rules": [],
+                    "config": {
+                        "multiple": false,
+                        "options": [
+                            {
+                                "value": 1,
+                                "label": "Yes"
+                            },
+                            {
+                                "value": 0,
+                                "label": "No"
+                            }
+                        ]
+                    }
+                },
+                {
+                    "type": "slider",
+                    "name": "rating",
+                    "label": "Rating",
+                    "helperText": null,
+                    "hidden": false,
+                    "disabled": false,
+                    "live": false,
+                    "rules": {
+                        "numeric": true,
+                        "min": 0,
+                        "max": 10,
+                        "messages": {
+                            "numeric": "The rating field must be a number.",
+                            "min": "The rating field must be at least 0.",
+                            "max": "The rating field must not be greater than 10."
+                        }
+                    },
+                    "default": 0,
+                    "config": {
+                        "min": 0,
+                        "max": 10,
+                        "multiple": false,
+                        "step": 1
+                    }
+                },
+                {
+                    "type": "slider",
+                    "name": "price_range",
+                    "label": "Price range",
+                    "helperText": null,
+                    "hidden": false,
+                    "disabled": false,
+                    "live": false,
+                    "rules": {
+                        "numeric": true,
+                        "min": 0,
+                        "max": 100,
+                        "messages": {
+                            "numeric": "The price range field must be a number.",
+                            "min": "The price range field must be at least 0.",
+                            "max": "The price range field must not be greater than 100."
+                        }
+                    },
+                    "default": [
+                        20,
+                        40
+                    ],
+                    "config": {
+                        "min": 0,
+                        "max": 100,
+                        "multiple": true,
+                        "step": 5
+                    }
+                },
+                {
+                    "type": "text_entry",
+                    "name": "delivery_note",
+                    "label": "Delivery note",
+                    "helperText": null,
+                    "hidden": false,
                     "disabled": false,
                     "live": false,
                     "rules": []

@@ -17,6 +17,11 @@ use Gait\FilamentMobile\Tests\Fixtures\Resources\BannerResource;
  * is `name` (see the model's own docblock), so each row's record key IS its
  * `name` — the contract rule that a relation row is keyed by the RELATED
  * model's route key, never assumed `id`. Do not "fix" the missing id.
+ *
+ * Row order is Blue then Red although Red was created first: BannerResource
+ * declares `relationDefaultSort('tags', 'name')` (P11), so the golden also
+ * proves the declared default sort reaches the endpoint. Do not "fix" the
+ * order either.
  */
 
 it('matches the committed relation-list contract snapshot', function () {

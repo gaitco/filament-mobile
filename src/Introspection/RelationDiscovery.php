@@ -224,6 +224,13 @@ final class RelationDiscovery
             self::refuse($refused, $stray, "relationCard('{$stray}') matches no relation on this resource — check it against getRelations()");
         }
 
+        // The P11 declaration maps get the relationCard() refusal unchanged:
+        // a typo'd key is inert — the declaration is simply never read — so
+        // it is refused here and named by `doctor`, never stored in silence.
+        foreach (self::strayDeclarationKeys($mobile, $seen) as [$method, $stray]) {
+            self::refuse($refused, $stray, "{$method}('{$stray}') matches no relation on this resource — check it against getRelations()");
+        }
+
         return ['published' => $published, 'refused' => $refused];
     }
 
@@ -243,6 +250,31 @@ final class RelationDiscovery
     private static function strayCardKeys(?MobileResource $mobile, array $seen): array
     {
         return array_values(array_diff($mobile?->getRelationCardKeys() ?? [], $seen));
+    }
+
+    /**
+     * The strayCardKeys() check for the P11 declaration maps, yielding the
+     * declaring method alongside the key so the refusal — and `doctor`'s
+     * line — names the call to fix, not just the typo.
+     *
+     * @param  list<string>  $seen
+     * @return list<array{0: string, 1: string}>
+     */
+    private static function strayDeclarationKeys(?MobileResource $mobile, array $seen): array
+    {
+        $strays = [];
+
+        foreach ([
+            'relationSearchable' => $mobile?->getRelationSearchableKeys() ?? [],
+            'relationSorts' => $mobile?->getRelationSortsKeys() ?? [],
+            'relationDefaultSort' => $mobile?->getRelationDefaultSortKeys() ?? [],
+        ] as $method => $keys) {
+            foreach (array_diff($keys, $seen) as $stray) {
+                $strays[] = [$method, $stray];
+            }
+        }
+
+        return $strays;
     }
 
     /**

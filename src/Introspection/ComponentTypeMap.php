@@ -30,6 +30,26 @@ final class ComponentTypeMap
         // options with no extra handling. The pilot found 38 uses — 39% of
         // every warning that panel produced, and the single largest gap.
         'Filament\\Forms\\Components\\CheckboxList' => 'multiselect',
+        // P10: same `Concerns\HasOptions` trait and getOptions() as Select
+        // and Radio (measured in vendor), so the walker's existing option
+        // branch reads it — widened like `radio` was, including the radio
+        // rule that it never gets an `optionsUrl` (no search affordance, no
+        // endpoint to post one to). `config.multiple` is the stated gate
+        // between the two wire shapes: scalar (single) or List (multiple).
+        'Filament\\Forms\\Components\\ToggleButtons' => 'toggle_buttons',
+        // P10: the second component in this map that implements
+        // `Contracts\HasNestedRecursiveValidationRules` (TagsInput is the
+        // first), which is what carries a RANGE slider's per-element
+        // numeric/min:/max: rules into RuleExtractor's `{$name}.*` branch
+        // unchanged. Its bounds otherwise publish and enforce through the
+        // ordinary machinery — see the walker's `slider` branches and
+        // RuleExtractor::rulesFor().
+        'Filament\\Forms\\Components\\Slider' => 'slider',
+        // Deprecated in vendor: an alias extending Infolists' TextEntry, so
+        // it maps to the existing `text_entry` type with zero new machinery —
+        // Entry::isDehydrated() is a hard false, which is the exact refusal
+        // FieldPersistence already applies (no rule, no writable name).
+        'Filament\\Forms\\Components\\Placeholder' => 'text_entry',
         // The only component in this map that implements
         // `Contracts\HasNestedRecursiveValidationRules` (measured in vendor),
         // which is what makes its entry more than a config mapping — see

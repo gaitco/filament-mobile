@@ -169,46 +169,78 @@ load-bearing:
 
 ## The file upload field
 
-A single-file `FileUpload`/`SpatieMediaLibraryFileUpload` node publishes
-`config.readOnly: false` plus two hints for a client to pre-filter and
-pre-warn with, both read straight off the component:
+A `FileUpload`/`SpatieMediaLibraryFileUpload` node — single or
+`->multiple()` — publishes `config.readOnly: false` plus hints for a client
+to pre-filter and pre-warn with, all read straight off the component:
 
 ```jsonc
 {
   "type": "file",
-  "name": "avatar",
+  "name": "attachments",
   "config": {
     "readOnly": false,
+    "multiple": true,
     "accept": ["image/png", "image/jpeg"],
-    "maxSize": 5120
+    "maxSize": 5120,
+    "maxFiles": 5,
+    "minFiles": 1
   }
 }
 ```
 
+- **`multiple`** — **always present on every `file` node on a current
+  server**, `false` for a single-file field: a stated gate, never inferred.
+  A client reads an *absent* `multiple` as `false`, because absence means a
+  server predating multi-file support, and a client must never invent a
+  capability the server did not declare.
 - **`accept`** — the field's `acceptedFileTypes()`, or absent when the field
-  never called it (unrestricted).
-- **`maxSize`** — kilobytes, Filament's own unit for `maxSize()`; absent when
-  the field never set one.
+  never called it (unrestricted). Per file, multiple or not.
+- **`maxSize`** — kilobytes, Filament's own unit for `maxSize()`; absent
+  when the field never set one. Per file, multiple or not.
+- **`maxFiles` / `minFiles`** — present only when a `->multiple()` field
+  declared them. These two are not merely hints: the write path carries
+  them as real validation rules on the array — `max`/`min` with **count
+  semantics**, because Laravel's `min`/`max` on an array count its elements
+  — plus a per-element `string` under `attachments.*`, so an over-count
+  submission is a `422` on the field and a crafted non-string element a
+  `422` keyed `attachments.0`. The count bound is the server's rule, not
+  the client's.
 
-These are hints only — see `laravel/filament-mobile/README.md`'s Upload
-section for how the upload endpoint re-derives and enforces both
-server-side regardless of what a client sends.
+The other hints are hints only — see `laravel/filament-mobile/README.md`'s
+Upload section for how the upload endpoint re-derives and enforces
+`accept`/`maxSize` server-side, per file, regardless of what a client
+sends.
 
-`FileUpload::multiple()`, and any single-file field whose
-`acceptedFileTypes()`/`maxSize()` closure throws, publish `config.readOnly:
-true` instead, with no `accept`/`maxSize` — the same shape a disabled field
-already uses. For the throwing case this is deliberate, not a missed
-config: the server would refuse every upload attempt against that field
-regardless of what was sent, so publishing an editable control would be
-offering a capability that cannot work.
+A field whose `acceptedFileTypes()`/`maxSize()` closure throws publishes
+`config.readOnly: true` with no `accept`/`maxSize` — the same shape a
+disabled field already uses, multiple or not. For the throwing case this is
+deliberate, not a missed config: the server would refuse every upload
+attempt against that field regardless of what was sent, so publishing an
+editable control would be offering a capability that cannot work. The
+multiplicity gate fails the same closed way: a field whose `isMultiple()`
+closure throws publishes `readOnly: true` with `multiple: true` and no
+hints, its write rule is withheld, and the upload endpoint refuses it — all
+three sites agree on the same closed answer.
 
-**The field's value on the wire is a stored path string, never bytes.**
-Uploading happens on a separate endpoint
-(`POST /{resource}/upload`) before the form is ever submitted; the value
-this node carries — on `/state`, on a record, in a create/update payload —
-is the path that endpoint returned, saved and read back exactly like any
-other string column. A client never inlines file bytes into a schema
-payload, a state payload, or a write body.
+**The field's value on the wire is stored paths, never bytes.** Uploading
+happens on a separate endpoint (`POST /{resource}/upload`) before the form
+is ever submitted; the value this node carries — on `/state`, on a record,
+in a create/update payload — is the path (single) or list of paths
+(multiple) that endpoint returned, saved and read back exactly like any
+other column. For a `multiple: true` field the value is **always a
+`List<String>`**, in every payload direction; sending a scalar string for a
+multiple field (or a list for a single one) is a `422`, not a coercion.
+Removal is wholesale-replacement, the relationship-repeater model: a
+submitted list is the whole new set, a submitted empty list clears the
+column (unless a `minFiles`/`required` forbids it), and a field the
+submission never mentions is untouched. A client never inlines file bytes
+into a schema payload, a state payload, or a write body.
+
+**Multiplicity does not change the upload endpoint — one file per
+request.** A multi-file field is served by N calls: each pick uploads
+through the same endpoint and the client appends the returned path to the
+field's list. Per-file enforcement (`accept`, `maxSize`) applies to every
+call exactly as it does for a single-file field.
 
 ## The radio field
 
@@ -244,6 +276,111 @@ long inline list.
 one per row; that is the right treatment on a phone regardless of what the
 panel configured.
 
+## The toggle_buttons field
+
+A `ToggleButtons::make('status')->options([...])` publishes a
+`toggle_buttons` node, carrying the **same flattened option shape**
+`select`/`radio` already publish — read through the same walker branch,
+widened like `radio` was, not copied:
+
+```jsonc
+{ "type": "toggle_buttons", "name": "status", "label": "Status",
+  "rules": { "required": true },
+  "config": {
+    "multiple": false,
+    "options": [ { "value": "draft", "label": "Draft" } ]
+  } }
+```
+
+- **`config.multiple` is always present**, a stated gate like a repeater's
+  `readOnly` — never inferred from absence. The value is a scalar when it is
+  `false` and a `List` when `true`: exactly the `select`/`multiselect` split,
+  through the ordinary `default`/`/state`/write paths.
+- **`config.optionsUrl` never appears on a `toggle_buttons` node**, however
+  many options it has — the radio ruling, for the radio's reason: the control
+  has no search affordance and nothing to post a query to. An over-cap field
+  inlines its full option list, and a client rendering this type must render
+  an arbitrarily long inline list.
+- **The `boolean()` preset needs no client special-casing.** It is an
+  options/colors/icons preset over `1`/`0`; it publishes options `1`/`0` and
+  the value travels as declared.
+
+A value that is not one of the published options is the server's to refuse —
+Filament builds an `in:` rule from the enabled option keys, the same
+enforcement a select already relies on. The client renders the options and
+pre-empts nothing.
+
+**Not on the wire, deliberately:** per-option colors, icons, tooltips,
+per-option disabled state, and `inline`/`grouped`/`hiddenButtonLabels`. All
+are presentation; a disabled option is enforced server-side by that same
+`in:` rule.
+
+## The slider field
+
+A `Slider::make('rating')->range(0, 10)->step(1)` publishes a `slider` node:
+
+```jsonc
+{ "type": "slider", "name": "rating", "label": "Rating",
+  "rules": { "required": true, "numeric": true, "min": 0, "max": 10 },
+  "config": { "min": 0, "max": 10, "step": 1, "multiple": false } }
+```
+
+- **`config.min` / `config.max` are always present** — the accessors answer
+  their own defaults (0/100) for an unconfigured field, so an absent key
+  reads as those defaults, never as an error.
+- **`config.step` is present only when the declared step is a number.**
+  Filament allows a string step; one publishes nothing, and absence means
+  "any step", never an error.
+- **`config.multiple` is always present — and on `/schema` it is a snapshot,
+  not a promise.** Filament decides range mode from the *state being an
+  array* (`isMultiple()` is `is_array($this->getRawState())`; there is no
+  `multiple()` method), and `/schema` walks a deliberately unseeded form, so
+  the walker falls back to `is_array(getDefaultState())`: on `/schema` only a
+  range slider declared with an array `->default([20, 40])` publishes
+  `multiple: true`. `/state` re-answers from real state. **A range slider
+  with no array default therefore publishes `multiple: false` on `/schema`
+  while its rules still say `array`** — a known, documented weakness. The
+  client rule is the usual one: render from the node, but never let a client
+  hint block a submission the server decides on; a `422` keyed to the field
+  lands on the field as usual.
+- **The bounds in `rules` are re-derived, not copied.** `Slider::setUp()`
+  force-registers `numeric`/`min:`/`max:` — and `integer` or
+  `multiple_of:{step}` when the step is set — behind rule closures keyed off
+  raw state, which the ordinary accessor reads cannot see. The server
+  re-derives them from `getMinValue()`/`getMaxValue()`/`getStep()`, the same
+  accessors `config` is read from, so hint and gate cannot drift.
+  `rangePadding` is folded into the enforced bound via the
+  `getMinValueWithPadding()`/`getMaxValueWithPadding()` variants; publishing
+  the padding separately would double-count it. A range slider's per-element
+  rules (`numeric`/`min:`/`max:` per element) ride the existing `name.*`
+  nested-recursive machinery, and its container rule is `array`/`list`.
+- **The value is a number, or a two-element `List` in range mode** — through
+  the ordinary `default`/`/state`/write paths.
+
+**Not on the wire, deliberately:** pips (mode/density/values/formatter/
+filter/stepped), tooltips, behavior, fillTrack, vertical, rtl,
+nonLinearPoints, minDifference/maxDifference, rangePadding (folded into the
+enforced bounds, above), decimalPlaces.
+
+## The Placeholder field
+
+A `Placeholder::make('note')->content(...)` in a form publishes as the
+existing **`text_entry`** type — no new type at all. The component extends
+`Infolists\Components\TextEntry` (it is a deprecated alias), carries no
+writable state, and no rule is admitted for an entry-typed node, so it is
+read-only with zero new machinery on either side. In a form it **renders
+nothing**: an entry type in a form is out of that registry's scope, and the
+client draws a `SizedBox.shrink()`. A crafted payload that submits a value
+for it gets a **`201`, not a `500`** — the name is never admitted to the
+write, so there is no column for a bad write to reach. That refusal shape is
+pinned by test.
+
+`ViewField` is the deliberate counterexample: it stays **unmapped by
+design** — an arbitrary Blade view has no data contract to read — and keeps
+the existing drop-with-warning treatment (`doctor` names it, its rule is
+withheld so its state is discarded on write). See
+`laravel/filament-mobile/README.md`'s Supported form inputs.
+
 ## The date, datetime and time fields
 
 `DatePicker`, `DateTimePicker` and `TimePicker` publish `date`, `datetime` and
@@ -256,7 +393,8 @@ accessor:
   "config": { "minDate": "2026-01-01", "maxDate": "2026-12-31", "seconds": true } }
 
 { "type": "time", "name": "opens_at",
-  "config": { "minDate": "09:00", "maxDate": "17:00", "seconds": false } }
+  "config": { "minDate": "09:00", "maxDate": "17:00", "seconds": false,
+              "minutesStep": 15 } }
 ```
 
 **The bounds are published exactly as the panel declared them, unnormalised.**
@@ -279,12 +417,38 @@ reporting, and is not the same event as a bound that was never declared.
 when it is true. Note that `seconds` defaults to **true** in Filament — an
 unconfigured picker publishes `true`, not `false`.
 
-**Bounds are hints, not validation.** The server refuses an out-of-range value
-only if the panel also declared a rule saying so, so a client that ignores
-them will not be corrected on submit.
+**`hoursStep` / `minutesStep` / `secondsStep` publish only when the evaluated
+value is greater than 1** — absent means 1, Filament's default — and only on
+`datetime` and `time` nodes; a `date` node has no time grid and never carries
+them. A throwing step closure degrades that one key, like every other
+closure-backed read. These keys are **advisory** — the same precedent as the
+repeater's `reorderable`: the contract states what the field was configured
+with, for a host rendering its own picker. Nothing enforces a step server-side,
+and the stock Material pickers have no step grid, so a client should neither
+infer enforcement from these keys nor snap a picked value — snapping would make
+mobile stricter than the panel it mirrors.
 
-**Not on the wire, deliberately:** `hoursStep` / `minutesStep` / `secondsStep`,
-`disabledDates`, `firstDayOfWeek` and `timezone`.
+**Bounds are hints, not validation — final ruling, by web parity.** Filament's
+web panel does not enforce `minDate`/`maxDate` server-side either (its JS
+picker restricts choice; no validation rule), so a mobile client that enforced
+them would be stricter than the panel it mirrors. The picker's
+`firstDate`/`lastDate` clamp is the client-side enforcement. The server refuses
+an out-of-range value only if the panel also declared a rule saying so, so a
+client that ignores the hints will not be corrected on submit.
+
+**Not on the wire, deliberately — final rejections, not deferrals:**
+
+- **`disabledDates`** is closure-evaluated, which on this contract means
+  schema-generation time, and `/schema` is ETag-cached: a dynamic list such as
+  `[now()->addDays(2)]` would freeze at build time and keep answering, silently
+  stale, until the panel code changed. A hint that goes silently stale is worse
+  than no hint. The day a host asks, the answer is per-record evaluation on
+  `/state` — no host has asked.
+- **`firstDayOfWeek`**: the stock Material date picker derives it from the
+  device locale and takes no parameter, so publishing it would state a
+  capability no client of this contract can honour.
+- **`timezone` and `displayFormat`**: unchanged from the bounds release — the
+  client renders device-local and in its own format.
 
 ## The color field
 
@@ -527,7 +691,9 @@ server:
   "key": "banners",
   "label": "Banners",
   "card": { "title": { "field": "name" }, "subtitle": { "field": "status" } },
-  "recordKey": "id"
+  "recordKey": "id",
+  "search": { "enabled": false },
+  "sorts": []
 }
 ```
 
@@ -542,12 +708,33 @@ server:
   parent resource's `recordKey`, and not always `id`. Parse each row in
   this relation's endpoint by `recordKey`, the same way the resource's own
   list is parsed by its own `recordKey`.
+- **`search` / `sorts`** are the same shapes a resource block publishes —
+  `{ "enabled": bool }` and a list of `{ "key", "label", "default",
+  "direction" }` — declared per relation on the server, never read off the
+  relation manager's table. **Always present on a current server**: an
+  undeclared relation publishes `search: { "enabled": false }` and `sorts:
+  []`. An *absent* key means a server predating P11 — read absent `search`
+  as disabled and absent `sorts` as `[]`, never as an error: the same
+  absence rule the `relations` array itself already carries.
 
 **`GET /{resource}/{record}/relations/{relation}`'s envelope is identical to
 a resource list's** — `{data, meta: {current_page, last_page, per_page,
 total}}`, the same card fields on each row. A client that already renders
 `GET /{resource}` can render this endpoint with no new parsing, keyed by
 `recordKey` above instead of the parent resource's own.
+
+**The endpoint answers `?search=`, `?sort=` and `?direction=` exactly as the
+resource index answers them** — LIKE with `!`-escaping inside a single where
+group, an unknown `sort` key is a **`422`**, a non-string parameter
+(`?sort[]=x`) is the same `422` the index promises, and a declared default
+sort applies when `?sort=` is absent. Validation runs **after** the full
+gate sequence: a `403` or `404` always wins over a `422`, because a
+validation error must never leak whether a relation exists for a record the
+caller cannot see. Against a relation that declares nothing, `?search=` is
+inert but an *undeclared sort key still 422s* — the sort parameter claimed
+a capability, the search parameter did not. Filters stay out, permanently:
+the same ruling the resource level already publishes `'filters' => []`
+under.
 
 **An absent `relations` key means a server predating P6d — read it as no
 relations, never as an error.** A client must not distinguish "the server

@@ -177,6 +177,9 @@ fields the infolist names.
 | `searchable(array $columns)` | Plain columns only — a dotted path would need a join and is not supported |
 | `sorts(array $labels)` | `['column' => 'Label']`; the key is spent on the database |
 | `defaultSort(string $key, string $direction = 'asc')` | Must be one of the declared `sorts()` keys |
+| `relationSearchable(string $relation, array $columns)` | Per-relation `searchable()` — same semantics, plain columns only |
+| `relationSorts(string $relation, array $labels)` | Per-relation `sorts()` |
+| `relationDefaultSort(string $relation, string $key, string $direction = 'asc')` | Must be one of the declared `relationSorts()` keys |
 
 ## What ships
 
@@ -184,14 +187,16 @@ fields the infolist names.
 |---|---|
 | [Resources and cards](#opt-a-resource-in) | Opt in per resource; the card is declared, the form and infolist are read from the resource |
 | [Actions](#actions) | The panel's own record actions, published per record with their authorization already applied |
-| [Upload](#upload) | Single-file `FileUpload` / `SpatieMediaLibraryFileUpload`, with the field's own accept and size rules enforced |
+| [Upload](#upload) | Single- and multi-file `FileUpload` / `SpatieMediaLibraryFileUpload`, with the field's own accept and size rules enforced per file |
 | [Repeater](#repeater) | JSON-column repeaters, validated per row |
 | [Radio](#radio) | Real radio buttons, sharing `Select`'s own options |
+| [Toggle buttons](#toggle-buttons) | `ToggleButtons` — single or multiple, always inlined, never a search URL |
+| [Slider](#slider) | Single or range slider, bounds published and enforced |
 | [Tags](#tags) | Free-form string tags, per-tag rules enforced, a configured separator mirrored into the stored column |
 | [Key/value](#keyvalue) | Free-form key-value pairs, gated by four client hints |
 | [Colour](#colour) | `ColorPicker` in the format the panel declared, never converted |
 | [Time and date bounds](#time-and-date-bounds) | `TimePicker` as its own type, and the `minDate`/`maxDate` a picker declares |
-| [Relations](#relations) | Relation managers as child lists — writable when exactly one resource owns the child model |
+| [Relations](#relations) | Relation managers as child lists — writable when exactly one resource owns the child model, searchable and sortable where the host declares it |
 | [Rich text](#rich-text) | `RichEditor` columns as a structured document, sanitised by construction |
 | [Dashboard](#dashboard) | The panel's opted-in widgets, computed live |
 | [Locale and direction](#locale-and-direction) | The panel's own locale and `ltr`/`rtl`, so the phone lays out the way the panel does |
@@ -218,20 +223,23 @@ database rather than at validation.
 | `Textarea` | `textarea` | |
 | `Select` | `select` | `multiselect` when `->multiple()`; a searchable relationship select publishes an `optionsUrl` instead of inlining |
 | `Radio` | `radio` | shares `Select`'s own options; always inlines, never falls back to a search URL |
+| `ToggleButtons` | `toggle_buttons` | same options shape; `->multiple()` publishes `multiple: true`; always inlines, never an `optionsUrl` |
 | `CheckboxList` | `multiselect` | |
 | `TagsInput` | `tags` | per-tag rules enforced; a `->separator()` is mirrored into the stored column |
 | `KeyValue` | `keyvalue` | four gates published as **client hints**, not enforced on write |
 | `Toggle` | `toggle` | |
+| `Slider` | `slider` | single or range; range mode is detected from an array `->default()` on `/schema` (see [Slider](#slider)) |
 | `Checkbox` | `checkbox` | |
 | `DatePicker` | `date` | publishes `minDate` / `maxDate` / `seconds` |
-| `DateTimePicker` | `datetime` | same |
+| `DateTimePicker` | `datetime` | same, plus `hoursStep` / `minutesStep` / `secondsStep` when `> 1` |
 | `TimePicker` | `time` | same; a bound may be a bare `09:00` or a full datetime |
 | `ColorPicker` | `color` | in the format the panel declared, never converted |
-| `FileUpload` | `file` | **single-file only** — a `->multiple()` upload publishes `readOnly: true` |
+| `FileUpload` | `file` | single or `->multiple()`; a multiple field's value is a List of stored paths, count bounds enforced on write |
 | `SpatieMediaLibraryFileUpload` | `file` | same |
 | `RichEditor` | `textarea` | **edited as raw HTML**; it renders as a document on read (see [Rich text](#rich-text)) but editing is still markup |
 | `Repeater` | `repeater` | JSON-column or `->relationship()`; only when **every** child round-trips |
 | `Hidden` | — | deliberately skipped from the wire; its `->default()` still applies on create |
+| `Placeholder` | `text_entry` | display-only; publishes as the existing entry type, admits no rule, and renders nothing in a form |
 
 Layout components pass through as containers: `Section`, `Grid`, `Tabs`,
 `Tabs\Tab` (flattened to a section — tabs are a poor control on a phone) and
@@ -240,8 +248,13 @@ Layout components pass through as containers: `Section`, `Grid`, `Tabs`,
 ### Not supported
 
 `Builder`, `CodeEditor`, `MarkdownEditor`, `ModalTableSelect`, `MorphToSelect`,
-`OneTimeCodeInput`, `Placeholder`, `Slider`, `TableSelect`, `ToggleButtons`,
-`ViewField`.
+`OneTimeCodeInput`, `TableSelect`, `ViewField`.
+
+`ViewField` is on this list **by design, not by omission**: it is an arbitrary
+Blade view with a state path and no introspectable data contract — the same
+ruling the P5 custom-Blade-widget decision already made — so there is nothing
+to publish. It keeps the ordinary unmapped treatment: dropped with a warning,
+named by `doctor`, rule withheld so its state is discarded on write.
 
 **There is an escape hatch.** `config('filament-mobile.types')` maps any
 component class onto a type this contract already defines, and host entries win
@@ -251,7 +264,7 @@ over the built-ins:
 // config/filament-mobile.php
 'types' => [
     \Ysfkaya\FilamentPhoneInput\Forms\PhoneInput::class => 'text',
-    \Filament\Forms\Components\ToggleButtons::class => 'select',
+    \Filament\Forms\Components\MarkdownEditor::class => 'textarea',
 ],
 ```
 
@@ -364,12 +377,19 @@ groups, and list-card actions. Row actions declared on the resource's
 
 ## Upload
 
-A single-file `FileUpload` (and `SpatieMediaLibraryFileUpload`) field is
-editable from a phone. `FileUpload::multiple()` is not — it still publishes
-`config.readOnly: true` on `/schema` and this endpoint always refuses it,
-reported informationally by `filament-mobile:doctor` (not a CI failure: a
-panel legitimately has multi-file fields, this slice just doesn't support
-them yet).
+A `FileUpload` (and `SpatieMediaLibraryFileUpload`) field is editable from
+a phone, single or `->multiple()`. `config.multiple` is always present on a
+`file` node; a multiple field additionally publishes `maxFiles`/`minFiles`
+when it declared them, and its value everywhere — `/state`, a record, a
+write body — is a `List<String>` of stored paths.
+
+**Multiplicity does not change this endpoint's shape — one file per
+request.** A multi-file field is served by N calls: the client picks one
+file, uploads it through the endpoint below, and appends the returned path
+to the field's list, once per file. Every per-file enforcement below
+(content-sniffed type, size, extension clamp, the component's own
+disk/directory/visibility) applies to each call exactly as it does for a
+single-file field.
 
 ```
 POST /api/mobile-panel/{resource}/upload
@@ -436,19 +456,30 @@ file is stored directly through the resolved component's own
 Filament's own web panel would produce.
 
 **The returned path becomes the field's value, and the ordinary write path
-saves it as a plain string — no change to `store()`/`update()`.** This
-mirrors Filament's own web panel, which also stores on pick, not on save.
-`RuleExtractor` now admits a single-file field's rule (multiple stays
-withheld), so the stored path enters the validated payload exactly like any
-other column value. The flip side: a single-file column accepts **any**
-string through the ordinary write path — matching the web panel's own
-Livewire-tamperable property — so a host must not feed that column to
-`Storage::download()`/`Storage::url()` (or any path-sensitive sink)
-unchecked.
+saves it — no change to `store()`/`update()`.** This mirrors Filament's own
+web panel, which also stores on pick, not on save. `RuleExtractor` admits a
+file field's rule — single or multiple — so the stored path(s) enter the
+validated payload exactly like any other column value. A multiple field's
+rule is `array`/`list` plus count-semantics `max:{maxFiles}`/
+`min:{minFiles}` when declared (Laravel's `min`/`max` on an array count its
+elements), with a per-element `string` under `name.*` — so a crafted
+`[1, 2]` 422s keyed `attachments.0`, and the count bound is the server's
+rule, not a client hint. Removal is wholesale-replacement, the
+relationship-repeater model: a submitted list is the whole new set, a
+submitted empty list clears the column, and an unmentioned field is
+untouched. A field whose `isMultiple()` closure throws keeps its rule
+withheld — the closed answer the schema walker and this endpoint's
+resolver both share. The flip side: a file column accepts **any**
+string (or list of strings) through the ordinary write path — matching the
+web panel's own Livewire-tamperable property — so a host must not feed that
+column to `Storage::download()`/`Storage::url()` (or any path-sensitive
+sink) unchecked.
 
 **Orphaned files accumulate.** A user who picks a file and abandons the form
 leaves a stored file with no row pointing at it — the same property
-Filament's own temporary-upload directory has. This package does not clean
+Filament's own temporary-upload directory has, and a multiple field makes
+it more frequent, not different: one abandoned form can strand a whole
+list. This package does not clean
 them up; a host that wants that prunes the storage directory on its own
 schedule (e.g. delete anything older than N days with no matching row). No
 claim-on-save handshake exists to avoid this — that would be a second
@@ -524,7 +555,7 @@ disagree:
    has no field to render it against.
 2. **A repeater whose item template holds a child that would not
    round-trip** — a `Hidden`, an unmapped component type, a `disabled()` or
-   never-dehydrated field, a multiple-`file` field, or a **relation-write
+   never-dehydrated field, or a **relation-write
    child whose `->dehydrated(true)` puts it back into the row's stored
    state**. See below; this is the one that would otherwise lose data.
 
@@ -737,6 +768,98 @@ nothing to give `Radio` parity with. Left as-is.
 
 - **`Radio::isInline()` is ignored.** Options always stack one per row —
   the right treatment on a phone regardless of what the panel configured.
+
+## Toggle buttons
+
+`ToggleButtons::make('status')->options([...])` is a working, editable field
+on the phone — the button-row sibling of a radio group.
+
+```php
+ToggleButtons::make('status')->options([
+    'draft' => 'Draft',
+    'live' => 'Live',
+]);
+
+ToggleButtons::make('flags')->multiple()->options([...]);
+
+ToggleButtons::make('active')->boolean();
+```
+
+The node shares the option machinery outright — `ToggleButtons` uses the same
+`Concerns\HasOptions` trait and `getOptions()` as `Select` and `Radio`
+(measured in vendor), so the walker's option branch reads it unchanged,
+widened rather than copied:
+
+```jsonc
+{ "type": "toggle_buttons", "name": "status",
+  "rules": { "required": true },
+  "config": { "multiple": false,
+    "options": [ { "value": "draft", "label": "Draft" } ] } }
+```
+
+**`config.multiple` is always present**, a stated gate like a repeater's
+`readOnly`: a single field's value is a scalar, a `->multiple()` field's a
+`List` — the `select`/`multiselect` split, through the ordinary write paths.
+**`optionsUrl` never appears** on this type, however long the list: like a
+radio it has no `CanBeSearchable` and nothing to post a query to, so an
+over-cap field inlines every option. The `boolean()` preset needs no
+special-casing — it publishes options `1`/`0` and the value travels as
+declared.
+
+### Known weaknesses, stated now
+
+- **Per-option colors, icons, tooltips and disabled state are not on the
+  wire**, and neither are `inline`/`grouped`/`hiddenButtonLabels` — all
+  presentation. A disabled option is still enforced server-side by the `in:`
+  rule Filament builds from the enabled option keys.
+
+## Slider
+
+`Slider::make('rating')->range(0, 10)->step(1)` is a working, editable field
+on the phone — single thumb, or two thumbs when the field is a range.
+
+```php
+Slider::make('rating')->range(0, 10)->step(1);
+
+Slider::make('price_range')->range(0, 100)->step(5)->default([20, 40]);
+```
+
+```jsonc
+{ "type": "slider", "name": "rating",
+  "rules": { "required": true, "numeric": true, "min": 0, "max": 10 },
+  "config": { "min": 0, "max": 10, "step": 1, "multiple": false } }
+```
+
+**The bounds are enforced, not just hinted.** `Slider::setUp()` force-registers
+`required`, `numeric` + `min:`/`max:`, and `integer`/`multiple_of:{step}` on
+the component itself (measured in vendor) — behind rule closures keyed off raw
+state, which the ordinary accessor reads cannot see — so `RuleExtractor`
+re-derives the single-slider bounds from `getMinValue()`/`getMaxValue()`/
+`getStep()` (the WithPadding variants first, so `rangePadding` folds into the
+enforced bound rather than double-counting), and `array`/`list` for a range.
+A range's per-element rules ride the existing `name.*` nested-recursive
+machinery. The walker's published `rules` hints read the same accessors, so
+hint and gate cannot drift.
+
+**Range mode is detected from state, and `/schema` has none.** Filament's
+`isMultiple()` is `is_array($this->getRawState())` — there is no `multiple()`
+method — and the `/schema` walk is deliberately unseeded, so the walker falls
+back to `is_array(getDefaultState())`: declare the range with an array
+`->default([20, 40])`, as above, or `/schema` publishes `multiple: false`
+while the rules still say `array`. `/state` re-answers from real state, and a
+client never blocks a submission on the hint. A string step publishes no
+`step` key at all — absence means "any step".
+
+### Known weaknesses, stated now
+
+- **A range slider with no array default publishes `multiple: false` on
+  `/schema`** — the detection weakness above, documented rather than fixed,
+  because seeding the schema host's state to fix it would cost more than the
+  hint is worth.
+- **Pips, tooltips, behavior, fillTrack, vertical, rtl, nonLinearPoints,
+  minDifference/maxDifference and decimalPlaces are not on the wire.** The
+  first several are presentation; the difference constraints are JS-side
+  behaviour even in Filament.
 
 ## Tags
 
@@ -985,7 +1108,8 @@ DateTimePicker::make('published_at')->minDate('2026-01-01')->maxDate('2026-12-31
 
 ```jsonc
 { "type": "time", "name": "opens_at",
-  "config": { "minDate": "09:00", "maxDate": "17:00", "seconds": false } }
+  "config": { "minDate": "09:00", "maxDate": "17:00", "seconds": false,
+              "minutesStep": 15 } }
 ```
 
 **`TimePicker` costs almost nothing on the server**, because it is a five-line
@@ -998,6 +1122,15 @@ normalised: `->minDate('09:00')` publishes `"09:00"`, while a Carbon publishes
 `"2026-01-01 09:00:00"`. Normalising a bare time into a full datetime would
 invent a date the panel never chose, so the client parses both instead.
 
+**Steps publish.** `hoursStep` / `minutesStep` / `secondsStep` appear in
+`config` on `datetime` and `time` nodes **only when the evaluated value is
+greater than 1** — absent means 1, Filament's default — and never on a `date`
+node, which has no time grid. A throwing step closure degrades that one key,
+as every closure-backed read does. The keys are advisory, the repeater
+`reorderable` precedent: they state what the field was configured with, for a
+host rendering its own picker. The server enforces no step, and nothing should
+snap a picked value to one — that would make mobile stricter than the panel.
+
 Until this release **no bound reached the client at all** — the walker never
 published `config` for a date node, while the Flutter client had parsed
 `minDate`/`maxDate` and passed them to its picker since the day it was written.
@@ -1005,16 +1138,23 @@ The code was wired and dead.
 
 ### Known weaknesses, stated now
 
-- **Bounds are hints, not rules.** The server refuses an out-of-range value
-  only if the panel declared a validation rule saying so; publishing a bound
-  does not create one.
-- **`hoursStep`, `minutesStep` and `secondsStep` are ignored**, so the phone
-  may offer a minute the web panel's stepper would not. Filament enforces those
-  in the UI rather than in validation, so mobile is no looser on the server
-  side — but it is a visible difference.
-- **`disabledDates`, `firstDayOfWeek` and `timezone` are not published.** The
-  first is the one most likely to matter, and it is why this package does not
-  claim its date pickers are complete.
+- **Bounds are hints, not rules — final ruling, by web parity.** Filament's
+  own web panel does not enforce `minDate`/`maxDate` server-side either (its
+  JS picker restricts choice; no validation rule), so a mobile client
+  enforcing them would be stricter than the panel it mirrors. The server
+  refuses an out-of-range value only if the panel declared a validation rule
+  saying so; publishing a bound does not create one.
+- **`disabledDates` is not published — finally, not yet-to-build.** It is
+  closure-evaluated, which on this contract means schema-generation time, and
+  `/schema` is ETag-cached: a dynamic list would freeze at build time and keep
+  answering, silently stale, until the panel code changed. A hint that goes
+  silently stale is worse than no hint. The day a host asks, the answer is
+  per-record evaluation on `/state` — no host has asked.
+- **`firstDayOfWeek`, `timezone` and `displayFormat` are not published.** The
+  stock Material date picker derives the first day of week from the device
+  locale and takes no parameter, so publishing it would state a capability no
+  client can honour; timezone and display format stay client-local by the
+  standing ruling.
 
 ## Relations
 
@@ -1023,9 +1163,13 @@ The code was wired and dead.
 A resource's `getRelations()` — the same relation managers a Filament panel
 already declares — becomes paginated child lists on mobile, **writable** when
 the related model resolves to exactly one registered resource (see Writes
-below). The manager's own filters, search and sorting are ignored — the list
-is served in relation order. Nothing is declared to opt this in; every
-relation manager a resource's `getRelations()` returns is introspected.
+below), and **searchable/sortable** where the host declares it per relation
+(see Search and sort below). The manager's own table is never introspected
+for any of it: its filters are ignored permanently, and its
+`isSearchable()`/`isSortable()` columns are never read — an undeclared
+relation is served in relation order. Nothing is declared to opt the list
+itself in; every relation manager a resource's `getRelations()` returns is
+introspected.
 
 ```
 GET /api/mobile-panel/{resource}/{record}/relations/{relation}
@@ -1039,8 +1183,9 @@ the page rather than one per row. A client that can render a resource list
 can render this with no new parsing.
 
 Neither endpoint honours a client-supplied `perPage`; both use
-`config('filament-mobile.per_page')`. Search, sort and the manager's filters
-are the deliberate non-mirror, above.
+`config('filament-mobile.per_page')`. The manager's filters remain the
+deliberate non-mirror, above; `?search=`/`?sort=`/`?direction=` are answered
+where the host declares them — see Search and sort below.
 
 `/schema` gains a `relations` array per resource — **always present**, `[]`
 for a resource with none, never an absent key:
@@ -1051,7 +1196,9 @@ for a resource with none, never an absent key:
   "label": "Banners",
   "card": { "title": { "field": "name" }, "subtitle": { "field": "status" } },
   "recordKey": "id",
-  "resource": "banners"
+  "resource": "banners",
+  "search": { "enabled": false },
+  "sorts": []
 }
 ```
 
@@ -1078,6 +1225,13 @@ for a resource with none, never an absent key:
   published schema and a `404` can never disagree about whether a relation
   is writable. Absent means unavailable, the standing rule: a client must
   not invent a write target the server did not declare.
+- **`search` / `sorts`** are the same shapes the resource block publishes —
+  `{ "enabled": bool }` and a list of `{ "key", "label", "default",
+  "direction" }` — and are **always present on a current server**: an
+  undeclared relation publishes `search: { "enabled": false }` and `sorts:
+  []`. An *absent* key means a server predating P11 — a client reads absent
+  `search` as disabled and absent `sorts` as `[]`, never as an error. See
+  Search and sort below.
 
 A relation the package refuses (see below) is **absent** from `relations`,
 not published disabled — the package's standing rule: absence means
@@ -1177,6 +1331,60 @@ A closure that returns something other than the `MobileCard` it was given —
 usually a block body missing its `return` — is refused by `relationCard()`
 itself, at declaration time.
 
+### Search and sort — host-declared per relation
+
+```php
+MobileResource::make()
+    ->relationSearchable('tags', ['name', 'slug'])
+    ->relationSorts('tags', ['name' => 'Name', 'created_at' => 'Created'])
+    ->relationDefaultSort('tags', 'name');
+```
+
+The declarations are **host declarations, keyed by relationship name** —
+the same ruling the resource level already made, and for its reasons: the
+mobile surface is an explicit opt-in, sorts carry host-worded labels, and
+the one table feature that could be introspected (filters) is deliberately
+never read. A relation is a smaller list, not a different philosophy, so the
+manager's own `isSearchable()`/`isSortable()` columns are never consulted.
+Semantics are the resource level's exactly: `relationDefaultSort()` throws
+on an undeclared key and normalises/rejects the direction at declaration
+time, and a `relationSorts()` call after `relationDefaultSort()` drops a
+dangling default. Plain columns only — a dotted path would need a `whereHas`
+and is deferred, the index's own ruling, inherited.
+
+A stray declaration — a `relationSorts('tgos', …)` typo naming no relation
+the resource declares — is **refused, not stored silently**:
+`RelationDiscovery::strayDeclarationKeys()` checks the three declaration
+maps exactly as it already checks `relationCard()` keys, and
+`filament-mobile:doctor` names each one with the method that declared it.
+
+The endpoint answers the three parameters with the index's exact contract:
+
+- **`?search=`** — LIKE over the declared columns, the same `!`-escaping
+  and one-where-group scoping as the index's `applySearch()`. The group
+  stays inside the relationship's own constraint.
+- **`?sort=` + `?direction=`** — validated against the relation's declared
+  sorts; an **unknown key is a `422`**, never a silently ignored parameter.
+  A declared default applies when `?sort=` is absent; `?direction=` defaults
+  to the default sort's direction when the default key is in play, else
+  `asc`.
+- **A non-string parameter (`?sort[]=x`) is the same `422`** the index's
+  `stringQuery()` promises.
+- **Validation runs after the full gate sequence** — resource 404 →
+  `viewAny` 403 → relation 404 → record 404 → record `view` 403 → relation
+  gate — so a `403`/`404` always wins over a `422`: a validation error must
+  never leak whether a relation exists for a record the caller cannot see.
+- **Against a relation that declares nothing, search/sort are inert** —
+  `enabled: false` means there is nothing to apply — **except an undeclared
+  sort key, which still 422s**: the sort parameter claimed a capability, the
+  search parameter did not. Filters stay out, permanently.
+
+The machinery is one mechanism, not two: `stringQuery()`, `applySearch()`
+and `applySort()` moved verbatim from `MobilePanelController` to
+`src/Http/ListQuery.php`, which both controllers now share — `applySort`
+takes the resolved `(sorts, defaultKey, defaultDirection)` triple, so the
+resource and relation call sites differ only in where the triple comes from.
+
 ### Writes — a child row is created, updated and deleted through the parent
 
 ```
@@ -1252,10 +1460,13 @@ this is reported informationally, not as a refusal.
   moving the mechanism, which the tripwire cannot see. That is caught
   behaviourally instead — the narrowing-refusal tests red — which is why
   both kinds of test exist.
-- **The relation manager's filters, search and sorting are ignored.** The
-  list is in relation order, unfiltered. A panel whose relation manager is
-  only usable with its filters gets a list that is technically correct and
-  practically wrong.
+- **The relation manager's own filters stay ignored, and its table's
+  search/sort columns are never read.** Search and sort exist only where the
+  host declares them per relation (Search and sort above); undeclared, the
+  list is in relation order, unfiltered. Filters are out permanently — the
+  resource level's `'filters' => []` ruling, inherited. A panel whose
+  relation manager is only usable with its filters gets a list that is
+  technically correct and practically wrong.
 - **Only the first two columns become a card.** A relation whose meaning
   lives in its third column looks empty of information.
 - **Attach and detach are not exposed.** Create, update and delete through
@@ -1690,7 +1901,9 @@ with each record on the detail endpoint, evaluated against the real model.
 
 Reports which resources are exposed, which components could not be walked,
 drift between `mobile()` and `table()`, card paths that resolve to nothing,
-relations it refuses (with the reason), and published relations whose rows
+relations it refuses (with the reason), stray per-relation declarations (a
+`relationCard()`/`relationSorts()` key naming no relation the resource
+declares), and published relations whose rows
 are read-only because no single resource owns the child model —
 distinguishing zero owners from several, because the fixes differ.
 Exits non-zero on anything actionable, so CI can gate on it.
@@ -1732,17 +1945,17 @@ Measured against a real 35-resource production panel.
 - **91.7% of components walk cleanly.** The rest emit a warning and are omitted
   — never silently dropped. `Schemas\Components\Livewire` is out of scope.
   (86.4% was the rate *before* `CheckboxList` was mapped; see the pilot's
-  §10.) A single-file `FileUpload` now walks as an editable field —
-  see the Upload section above; only `FileUpload::multiple()` remains out of
-  scope. `Repeater` now walks as an editable field too — see the Repeater
+  §10.) `FileUpload` now walks as an editable field, single or
+  `->multiple()` — see the Upload section above. `Repeater` now walks as an editable field too — see the Repeater
   section above; `Repeater::relationship()` writes through Filament's own
   relation pass, at a delete-all-then-recreate cost per save.
   `RichEditor` now walks too — a `textarea` on the form always (see Rich
   text above), and `rich_entry` on the infolist where `->prose()` or the
   model's own `HasRichContent` says the column is rich. `Radio`, `TagsInput`
   and `KeyValue` now walk as editable fields too — see the Radio, Tags and
-  Key/value sections above. None of the percentages above has been
-  re-measured against the pilot panel since these shipped.
+  Key/value sections above. So do `ToggleButtons` and `Slider` — see the
+  Toggle buttons and Slider sections above. None of the percentages above has
+  been re-measured against the pilot panel since these shipped.
 - **A media-library image on a card serialises as `null`.** `leadingImage()`
   needs a real attribute; there is no way to name a media collection yet.
 - **Badges carry the raw value**, not the formatted label. Supply the colour map
@@ -1772,7 +1985,9 @@ Measured against a real 35-resource production panel.
   Singular relationship **containers** (`Section::make()->relationship()`)
   are still not saved and stay published `disabled: true`.
 - **Dates are ISO-8601 UTC.** The panel's display format does not travel.
-- **`filters` is always `[]`.** Table filters are not introspected.
+- **`filters` is always `[]`.** Table filters are not introspected — at the
+  resource level, and per relation (which inherits the ruling permanently;
+  relation search and sort are host declarations instead — see Relations).
 - **Tabs are flattened to sections** — deliberately; tabs are a poor phone
   control. A `Tabs` container's own name may surface as a label.
 - **`helperText` is always `null`.** Filament exposes no public getter for it on

@@ -74,16 +74,66 @@ it('refuses a file whose content-type lies about its content', function () {
     }
 });
 
-it('refuses a multiple field, a disabled field and an unknown field identically', function () {
+it('accepts a file for a multiple field, one file per request', function () {
+    // P12: the endpoint keeps its shape — `file` + `field`, one path back —
+    // and a multiple field is served by N calls. `gallery` declares no
+    // constraints and no disk, so it stores on the default disk like
+    // `avatar`.
+    Storage::fake('local');
+
+    $response = $this->actingAs(makeUser('admin'))
+        ->postJson('/api/mobile-panel/banners/upload', [
+            'field' => 'gallery',
+            'file' => UploadedFile::fake()->image('photo.png'),
+        ])
+        ->assertOk();
+
+    $path = $response->json('path');
+
+    expect($path)->toBeString()->not->toBeEmpty();
+    Storage::disk('local')->assertExists($path);
+});
+
+it('applies a multiple field\'s own per-file constraints, unchanged', function () {
+    // Per-file enforcement is the upload's job (the count bound is the
+    // write path's): `attachments` declares disk/maxSize/accept, and each
+    // file of the loop must pass exactly as a single-file field's would.
+    $response = $this->actingAs(makeUser('admin'))
+        ->postJson('/api/mobile-panel/banners/upload', [
+            'field' => 'attachments',
+            'file' => UploadedFile::fake()->image('photo.png'),
+        ])
+        ->assertOk();
+
+    Storage::disk('public')->assertExists($response->json('path'));
+
+    $this->actingAs(makeUser('admin'))
+        ->postJson('/api/mobile-panel/banners/upload', [
+            'field' => 'attachments',
+            'file' => UploadedFile::fake()->create('notes.txt', 10, 'text/plain'),
+        ])
+        ->assertStatus(422);
+
+    $this->actingAs(makeUser('admin'))
+        ->postJson('/api/mobile-panel/banners/upload', [
+            'field' => 'attachments',
+            'file' => UploadedFile::fake()->image('huge.png')->size(2048),
+        ])
+        ->assertStatus(422);
+});
+
+it('refuses a disabled field and an unknown field identically', function () {
     // One bodyless 403 for every refusal: a client must not be able to map
     // the panel's configuration by probing field names. Asserting the
     // status code alone would be true by construction (every abort(403)
     // shares Laravel's default body) — comparing the bodies is what
-    // actually pins "identical", not just "all forbidden".
+    // actually pins "identical", not just "all forbidden". `gallery` left
+    // this list in P12 — a multiple field is served now — and
+    // `exploding_multiple` is the multiplicity shape that still refuses.
     $user = makeUser('admin');
     $bodies = [];
 
-    foreach (['gallery', 'locked_file', 'no_such_field', 'name'] as $field) {
+    foreach (['locked_file', 'no_such_field', 'name', 'exploding_multiple'] as $field) {
         $bodies[$field] = $this->actingAs($user)
             ->postJson('/api/mobile-panel/banners/upload', [
                 'field' => $field,

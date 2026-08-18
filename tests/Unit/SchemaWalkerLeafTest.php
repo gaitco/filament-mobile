@@ -127,15 +127,65 @@ it('emits a single-file field as writable, since P6a', function () {
     expect($nodes[0]['type'])->toBe('file')
         ->and($nodes[0]['name'])->toBe('avatar')
         ->and($nodes[0]['label'])->toBe('الصورة')
-        ->and($nodes[0]['config']['readOnly'])->toBeFalse();
+        ->and($nodes[0]['config']['readOnly'])->toBeFalse()
+        // `multiple` is always present on a current server's file node —
+        // absence means a server predating P12, and a client must never
+        // invent a capability the server did not declare.
+        ->and($nodes[0]['config']['multiple'])->toBeFalse();
 });
 
-it('emits a multiple-file field as read-only, so a client cannot offer an upload', function () {
-    $nodes = walk([Filament\Forms\Components\FileUpload::make('gallery')->multiple()]);
+it('emits a multiple-file field as writable, publishing multiple and its declared count bounds', function () {
+    // P12: a multiple field is a List<String> of stored paths, writable
+    // through the ordinary write path — the refusal is gone. maxFiles/
+    // minFiles publish only when the field declared them.
+    $nodes = walk([Filament\Forms\Components\FileUpload::make('gallery')->multiple()->maxFiles(5)->minFiles(1)]);
 
     expect($nodes[0]['type'])->toBe('file')
-        ->and($nodes[0]['writable'])->toBeFalse()
-        ->and($nodes[0]['config']['readOnly'])->toBeTrue();
+        ->and($nodes[0])->not->toHaveKey('writable')
+        ->and($nodes[0]['config']['readOnly'])->toBeFalse()
+        ->and($nodes[0]['config']['multiple'])->toBeTrue()
+        ->and($nodes[0]['config']['maxFiles'])->toBe(5)
+        ->and($nodes[0]['config']['minFiles'])->toBe(1);
+});
+
+it('publishes no count bounds a multiple field did not declare', function () {
+    $nodes = walk([Filament\Forms\Components\FileUpload::make('gallery')->multiple()]);
+
+    expect($nodes[0]['config']['multiple'])->toBeTrue()
+        ->and($nodes[0]['config'])->not->toHaveKey('maxFiles')
+        ->and($nodes[0]['config'])->not->toHaveKey('minFiles');
+});
+
+it('locks a multiple-file field whose constraint closure throws, publishing no hints', function () {
+    // The throwing-constraint rule is unchanged by P12: a field whose
+    // acceptedFileTypes() cannot answer is one UploadController refuses
+    // unconditionally, so the wire must not offer the control.
+    $nodes = walk([Filament\Forms\Components\FileUpload::make('gallery')
+        ->multiple()
+        ->acceptedFileTypes(fn () => throw new RuntimeException('boom'))]);
+
+    expect($nodes[0]['config']['readOnly'])->toBeTrue()
+        ->and($nodes[0]['config']['multiple'])->toBeTrue()
+        ->and($nodes[0]['config'])->not->toHaveKey('accept')
+        ->and($nodes[0]['config'])->not->toHaveKey('maxSize')
+        ->and($nodes[0]['config'])->not->toHaveKey('maxFiles')
+        ->and($nodes[0]['config'])->not->toHaveKey('minFiles');
+});
+
+it('emits a file field whose multiple() gate throws as read-only and unwritable — the closed answer all three sites share', function () {
+    // RuleExtractor withholds the rule and UploadFieldResolver refuses the
+    // upload on the same throw, so the walker must not offer an editable
+    // control either. `multiple: true` is the closed PUBLISHED shape: the
+    // field is read-only either way, and a client must never render an
+    // unknown-multiplicity stored value as a single path.
+    $nodes = walk([Filament\Forms\Components\FileUpload::make('boom')
+        ->multiple(fn () => throw new RuntimeException('broken gate'))]);
+
+    expect($nodes[0]['writable'])->toBeFalse()
+        ->and($nodes[0]['config']['readOnly'])->toBeTrue()
+        ->and($nodes[0]['config']['multiple'])->toBeTrue()
+        ->and($nodes[0]['config'])->not->toHaveKey('accept')
+        ->and($nodes[0]['config'])->not->toHaveKey('maxSize');
 });
 
 it('resolves live and disabled through a real container, exactly like production', function () {

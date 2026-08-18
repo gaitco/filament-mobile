@@ -98,6 +98,29 @@
           }
         }
       ],
+      "relations": [
+        {
+          "key": "roles",
+          "label": "الأدوار",
+          "card": {
+            "title": {
+              "field": "name"
+            }
+          },
+          "recordKey": "id",
+          "search": {
+            "enabled": true
+          },
+          "sorts": [
+            {
+              "key": "name",
+              "label": "الاسم",
+              "direction": "asc",
+              "default": true
+            }
+          ]
+        }
+      ],
       "form": [
         {
           "type": "section",
@@ -172,6 +195,44 @@
               }
             },
             {
+              "type": "toggle_buttons",
+              "name": "status",
+              "label": "الحالة",
+              "rules": {
+                "required": true
+              },
+              "config": {
+                "multiple": false,
+                "options": [
+                  {
+                    "value": "draft",
+                    "label": "مسودة"
+                  },
+                  {
+                    "value": "active",
+                    "label": "نشط"
+                  }
+                ]
+              }
+            },
+            {
+              "type": "slider",
+              "name": "satisfaction",
+              "label": "التقييم",
+              "rules": {
+                "required": true,
+                "numeric": true,
+                "min": 0,
+                "max": 100
+              },
+              "config": {
+                "min": 0,
+                "max": 100,
+                "multiple": false,
+                "step": 5
+              }
+            },
+            {
               "type": "number",
               "name": "credit",
               "label": "الرصيد",
@@ -204,9 +265,43 @@
               "label": "تاريخ التوثيق"
             },
             {
+              "type": "time",
+              "name": "opens_at",
+              "label": "وقت الفتح",
+              "config": {
+                "seconds": false,
+                "minutesStep": 15
+              }
+            },
+            {
               "type": "textarea",
               "name": "bio",
               "label": "نبذة"
+            },
+            {
+              "type": "file",
+              "name": "avatar",
+              "label": "الصورة",
+              "config": {
+                "readOnly": false,
+                "multiple": false
+              }
+            },
+            {
+              "type": "file",
+              "name": "attachments",
+              "label": "المرفقات",
+              "config": {
+                "readOnly": false,
+                "multiple": true,
+                "accept": [
+                  "image/png",
+                  "image/jpeg"
+                ],
+                "maxSize": 1024,
+                "maxFiles": 3,
+                "minFiles": 1
+              }
             }
           ]
         },

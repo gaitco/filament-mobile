@@ -215,7 +215,10 @@ it('refuses a whole repeater when a child of its item template would not round-t
         // is by exact class name (ComponentTypeMap's docblock), so it stays
         // unmapped even though RichEditor is.
         'unmapped type' => MarkdownEditor::make('notes'),
-        'multiple file' => FileUpload::make('gallery')->multiple(),
+        // A multiple file CHILD is admitted since P12 (its per-element rule
+        // prefixes like any other's) — the refusing file shape is now only
+        // the multiplicity gate that cannot answer.
+        'multiple file gate throws' => FileUpload::make('gallery')->multiple(fn () => throw new RuntimeException('broken gate')),
     ];
 
     foreach ($cases as $label => $child) {
@@ -238,6 +241,28 @@ it('still names the offending child, so doctor can say which one cost the contro
     ]);
 
     expect($withheld)->toBe('id');
+});
+
+it('admits a multiple-file child, prefixing its container and per-element rules into the row', function () {
+    // P12: a multiple file field round-trips like any other admitted child —
+    // `line_items.*.gallery` carries the container rules and
+    // `line_items.*.gallery.*` the per-element `string`, off the same
+    // descent as the top-level case, so a repeater holding one is no longer
+    // refused whole.
+    $components = [
+        Repeater::make('line_items')->schema([
+            TextInput::make('sku')->required(),
+            FileUpload::make('gallery')->multiple()->maxFiles(2),
+        ]),
+    ];
+
+    $rules = RuleExtractor::fromComponents($components);
+
+    expect($rules['line_items'])->toBe(['array', 'list'])
+        ->and($rules['line_items.*.sku'])->toBe(['required'])
+        ->and($rules['line_items.*.gallery'])->toBe(['array', 'list', 'max:2'])
+        ->and($rules['line_items.*.gallery.*'])->toBe(['string'])
+        ->and(WritableNames::of($components))->toBe(['line_items']);
 });
 
 /**

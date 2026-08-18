@@ -318,36 +318,53 @@ it('omits the email key on a field that is not an email', function () {
     expect(findFormNode(schemaFor('banners'), 'name')['rules'])->not->toHaveKey('email');
 });
 
-it('marks a field this package cannot persist as not writable', function () {
-    // `gallery` is multiple, so it stays the one this package cannot
-    // persist — a single-file field like `avatar` is writable since P6a
-    // (RuleExtractor admits its rule; see the file-upload tests below).
-    $node = findFormNode(schemaFor('banners'), 'gallery');
-
-    expect($node['writable'])->toBeFalse();
-});
-
 it('publishes a single-file upload as writable, with its accept and maxSize', function () {
     // P6a: the write path genuinely persists a single-file field now
     // (RuleExtractor admits its rule, Task 1), so /schema must stop
     // publishing `writable: false` / `readOnly: true` for one — the two
     // were left silently disagreed until this task. Absent `writable` means
-    // writable, same convention as any ordinary field.
+    // writable, same convention as any ordinary field. `multiple: false` is
+    // always present since P12: an absent key means a server predating P12,
+    // and a client must never invent a capability the server did not declare.
     $node = findFormNode(schemaFor('banners'), 'hero_image');
 
     expect($node)->not->toHaveKey('writable')
         ->and($node['config']['readOnly'])->toBeFalse()
+        ->and($node['config']['multiple'])->toBeFalse()
         ->and($node['config']['accept'])->toBe(['image/png', 'image/jpeg'])
         ->and($node['config']['maxSize'])->toBe(1024);
 });
 
-it('keeps a multiple-file upload readOnly and unwritable', function () {
-    // Unchanged: multiple-file has nowhere to save more than one path per
-    // column this slice, and RuleExtractor still withholds its rule.
+it('publishes a fully-declared multiple upload as writable, with multiple and every hint', function () {
+    // P12: a multiple field is a List<String> of stored paths, admitted to
+    // the write path with array/list + count rules (RuleExtractor), so the
+    // schema publishes it editable. accept/maxSize stay per-file hints (the
+    // upload endpoint enforces them per file); maxFiles/minFiles publish
+    // only because the field declared them.
+    $node = findFormNode(schemaFor('banners'), 'attachments');
+
+    expect($node)->not->toHaveKey('writable')
+        ->and($node['config']['readOnly'])->toBeFalse()
+        ->and($node['config']['multiple'])->toBeTrue()
+        ->and($node['config']['accept'])->toBe(['image/png', 'image/jpeg'])
+        ->and($node['config']['maxSize'])->toBe(1024)
+        ->and($node['config']['maxFiles'])->toBe(3)
+        ->and($node['config']['minFiles'])->toBe(1);
+});
+
+it('publishes a plain multiple upload as writable, with multiple and no constraint hints', function () {
+    // `gallery` declares nothing beyond ->multiple(): no accept/maxSize, and
+    // no maxFiles/minFiles keys at all — a client reads their absence as
+    // "unbounded", never as zero.
     $node = findFormNode(schemaFor('banners'), 'gallery');
 
-    expect($node['writable'])->toBeFalse()
-        ->and($node['config']['readOnly'])->toBeTrue();
+    expect($node)->not->toHaveKey('writable')
+        ->and($node['config']['readOnly'])->toBeFalse()
+        ->and($node['config']['multiple'])->toBeTrue()
+        ->and($node['config'])->not->toHaveKey('accept')
+        ->and($node['config'])->not->toHaveKey('maxSize')
+        ->and($node['config'])->not->toHaveKey('maxFiles')
+        ->and($node['config'])->not->toHaveKey('minFiles');
 });
 
 it('locks a single-file field whose accepted-types gate cannot answer, rather than offering a control the upload endpoint will always refuse', function () {
@@ -377,11 +394,14 @@ it('locks a single-file field whose multiple() gate cannot answer, and withholds
     // (RuleExtractor read the throw as "not multiple") while the upload
     // resolver refused it — a control whose every upload 403'd, plus a PUT
     // that could write or clear the column. All three now agree on the
-    // closed answer.
+    // closed answer, and P12 did not move it: multiplicity that cannot be
+    // READ still refuses everywhere, with `multiple: true` as the closed
+    // published shape (never render an unknown-list value as one path).
     $node = findFormNode(schemaFor('banners'), 'exploding_multiple');
 
     expect($node['writable'])->toBeFalse()
-        ->and($node['config']['readOnly'])->toBeTrue();
+        ->and($node['config']['readOnly'])->toBeTrue()
+        ->and($node['config']['multiple'])->toBeTrue();
 });
 
 it('still publishes an unrestricted single-file field as writable, distinct from one whose gate threw', function () {
@@ -390,7 +410,8 @@ it('still publishes an unrestricted single-file field as writable, distinct from
     // the wire from exploding_types/exploding_max_size above.
     $node = findFormNode(schemaFor('banners'), 'avatar');
 
-    expect($node['config']['readOnly'])->toBeFalse();
+    expect($node['config']['readOnly'])->toBeFalse()
+        ->and($node['config']['multiple'])->toBeFalse();
 });
 
 it('persists a hero_image path through the ordinary, unmodified write path', function () {

@@ -28,10 +28,15 @@ it('publishes the field own accepted types and max size', function () {
         ->and($constraints['maxSizeKb'])->toBe(1024);
 });
 
-it('refuses a multiple upload field', function () {
-    // Deferred this slice. Refusing here is what keeps the endpoint honest
-    // with the readOnly the schema publishes for it.
-    expect(uploadResolver()->resolve('gallery'))->toBeNull();
+it('resolves a multiple upload field, since P12', function () {
+    // Multiplicity is no longer a refusal: the endpoint still takes ONE file
+    // per request and the client loops, and the per-file constraints apply
+    // exactly as for a single-file field. The name is in the write path's
+    // own allow-set, which is what this resolve keys off.
+    $component = uploadResolver()->resolve('gallery');
+
+    expect($component)->not->toBeNull()
+        ->and($component->getName())->toBe('gallery');
 });
 
 it('refuses a disabled upload field', function () {
@@ -56,9 +61,9 @@ it('refuses a field whose disabled gate throws rather than propagating', functio
 it('refuses a field whose multiple() gate throws rather than propagating', function () {
     // The closed answer all three readers must share: RuleExtractor
     // withholds the rule and SchemaWalker publishes readOnly: true on the
-    // same throw (tested in their own suites), so the refusal here is the
-    // third party to that agreement, not a contradiction of a control the
-    // wire offered.
+    // same throw (tested in their own suites). The refusal here rides the
+    // WritableNames check — the withheld rule keeps the name out of the
+    // allow-set — so it cannot drift from what the write path would do.
     expect(fn () => uploadResolver()->resolve('exploding_multiple'))->not->toThrow(Throwable::class)
         ->and(uploadResolver()->resolve('exploding_multiple'))->toBeNull();
 });

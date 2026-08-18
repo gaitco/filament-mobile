@@ -27,6 +27,18 @@ return new class extends Migration
             $table->string('title');
             $table->text('body')->nullable();
             $table->boolean('published')->default(false);
+            // The Checkbox in PostResource's form: FormDefaults writes its
+            // `false` default on every create, so a create through the posts
+            // endpoint needs the column to exist.
+            $table->boolean('featured')->default(false);
+            // P13 edge sweep: real columns behind the date/time fixture
+            // fields, so a value can make the full GET → PUT → GET trip.
+            // `string` on purpose, not `time`/`dateTime`: the pin is that
+            // THIS stack converts nothing byte-wise, and a native MySQL
+            // DATETIME column would coerce a timezone-offset value before
+            // our code ever saw it again (CI runs MySQL as a second job).
+            $table->string('published_at')->nullable();
+            $table->string('closes_at')->nullable();
             $table->timestamps();
         });
 
@@ -102,10 +114,15 @@ return new class extends Migration
             $table->string('avatar')->nullable();
             // P6a: the single-file upload this slice makes genuinely
             // writable, and the disabled one that must refuse like any other
-            // disabled field. `gallery` (multiple) needs no column — it is
-            // never written.
+            // disabled field.
             $table->string('hero_image')->nullable();
             $table->string('locked_file')->nullable();
+            // P12: the multiple uploads — a JSON array of path strings per
+            // column, written wholesale by the ordinary write path.
+            // `gallery` is the unconstrained one, `attachments` the one with
+            // accept/maxSize/maxFiles/minFiles declared.
+            $table->json('gallery')->nullable();
+            $table->json('attachments')->nullable();
             // Two Hidden fields share this one, under `caption.ar` and
             // `caption.en`: a dotted field name is a PATH, and FormDefaults
             // wrote it as a literal key until the write pilot's review.
@@ -170,6 +187,17 @@ return new class extends Migration
             $table->string('website')->nullable();
             $table->string('handle')->nullable();
             $table->string('access_token')->nullable();
+            // P10: the ToggleButtons / Slider columns. `delivery_note` — the
+            // Placeholder — deliberately has NO column: it is display-only,
+            // so a write that ever reached it would 500 on the unknown
+            // column, which is exactly what PlaceholderTest proves cannot
+            // happen. `toggle_flags` and `price_range` are array-cast on the
+            // model, the same reasoning `labels` above documents.
+            $table->string('toggle_status')->nullable();
+            $table->json('toggle_flags')->nullable();
+            $table->boolean('toggle_active')->nullable();
+            $table->integer('rating')->nullable();
+            $table->json('price_range')->nullable();
             $table->timestamp('deleted_at')->nullable();
             $table->timestamps();
         });

@@ -1,5 +1,143 @@
 # Changelog
 
+## 0.8.0 — 2026-08-18
+
+P10–P13 ship: the remaining field types (`ToggleButtons`, `Slider`,
+`Placeholder` → `text_entry`), relation list search/sort, multi-file
+upload, and date/time step publication. Additive on the wire — no breaking
+changes.
+
+- **Date/time steps join the wire, advisory.** `datetime` and `time` nodes
+  publish `hoursStep` / `minutesStep` / `secondsStep` in `config` **only when
+  the evaluated value is greater than 1** — absent means 1, the vendor
+  default; a `date` node never carries them, and a throwing step closure
+  degrades that one key. The keys are the repeater `reorderable` precedent:
+  they state what the field was configured with, for a host rendering its own
+  picker — the server enforces no step. **No breaking changes** — additive
+  keys only. **Final, documented rejections, replacing the earlier "not built
+  yet" notes:** `disabledDates` (closure-evaluated at schema-generation time
+  behind the ETag-cached `/schema`, so a dynamic list would freeze and answer
+  silently stale), `firstDayOfWeek` (the stock Material picker derives it from
+  the device locale and takes no parameter), `timezone` / `displayFormat`
+  (unchanged), and bounds stay hints by web parity — the web panel enforces
+  `minDate`/`maxDate` nowhere server-side either. Edge sweep pinned:
+  seconds-default `HH:mm:ss` and tz-offset datetime byte-for-byte round-trips
+  (`DateTimeRoundTripTest`), bare-clock bounds and bounded-date-node exact
+  shape (`DateConfigTest`).
+
+- **Multi-file upload ships: `FileUpload::multiple()` is writable end to
+  end** (and `SpatieMediaLibraryFileUpload::multiple()`, which maps through
+  the same `'file'` type). The three coordinated refusals flipped together:
+  `SchemaWalker` publishes `readOnly: false` with hints for a multiple
+  field, `RuleExtractor` admits its name, and
+  `UploadFieldResolver::resolve()` stops answering null for
+  `isMultiple()`. The fail-closed agreement survives intact: a field whose
+  `isMultiple()` closure throws publishes `['readOnly' => true, 'multiple'
+  => true]`, keeps its rule withheld, and the upload endpoint still refuses
+  it — one closed answer across all three sites.
+
+  **Wire:** every `file` node now carries `config.multiple` — **always
+  present**, `false` for single; an absent `multiple` means a pre-P12
+  server and reads as `false`. A multiple field adds `maxFiles`/`minFiles`
+  only when declared; `accept`/`maxSize` keep their per-file semantics. The
+  value is a `List<String>` of stored paths in every payload direction —
+  a scalar string for a multiple field is a `422`, not a coercion.
+
+  **Write rules:** a multiple field's rule is `array`/`list` plus
+  count-semantics `max:{maxFiles}`/`min:{minFiles}` when declared
+  (Laravel's `min`/`max` on an array count its elements) plus a per-element
+  `string` under `name.*` — a crafted `[1, 2]` 422s keyed `name.0`, and the
+  count bound is the server's rule, not a client hint. Removal is
+  wholesale-replacement, the relationship-repeater model: a submitted list
+  is the whole new set, an empty list clears, an unmentioned field is
+  untouched. **The upload endpoint is unchanged** — one file per request; a
+  multi-file field is served by N calls, with every per-file enforcement
+  (sniffed `mimetypes:`, `max:{kb}`, the `SAFE_EXTENSIONS` clamp, the
+  component's own disk/directory/visibility) applying to each call.
+
+  **Doctor:** `UploadFieldResolver::multipleFieldNames()` and the
+  "Multi-file uploads" informational section are **removed** — they existed
+  to be loud about the refusal, and the refusal is gone. The
+  `MultiFileResource` fixture is repurposed to pin doctor-silent support.
+
+  **Fix surfaced by a repeater-nested multiple file:** `RuleExtractor`'s
+  repeater prefix loop now preserves a child entry's already-resolved rules
+  (the seeded per-element `string` on a tags or multiple-file `name.*`
+  entry) instead of re-deriving them from the component — re-deriving
+  handed the per-element name the field's container rules. A
+  repeater-nested multiple file is pinned at unit level only; no repeater
+  fixture holds a `FileUpload`.
+
+- **Relation lists gain search and sort, host-declared per relation.**
+  `MobileResource` gains `relationSearchable($relation, $columns)`,
+  `relationSorts($relation, $labels)` and
+  `relationDefaultSort($relation, $key, $direction = 'asc')` — the same
+  semantics as the resource level's `searchable()`/`sorts()`/`defaultSort()`
+  (declaration-time refusal of an undeclared default key, a lowercased or
+  rejected direction, a dangling default dropped by a later
+  `relationSorts()`), declared per relationship name rather than read off
+  the relation manager's table. `/schema` relation nodes now **always**
+  carry `search: { "enabled": bool }` and `sorts: [...]` in the resource
+  block's shapes (an undeclared relation publishes `enabled: false` / `[]`;
+  an absent key means a pre-P11 server, read as the same, never an error),
+  and `GET /{resource}/{record}/relations/{relation}` answers `?search=`,
+  `?sort=` and `?direction=` with the index's exact contract: LIKE with
+  `!`-escaping in one where group, a `422` for an unknown sort key or a
+  non-string parameter, validation after the full gate sequence (a
+  `403`/`404` always wins over a `422`), and an undeclared sort key still a
+  `422` where an undeclared search is inert. The shared machinery moved
+  verbatim from `MobilePanelController` to `src/Http/ListQuery.php` — one
+  mechanism, both controllers. A stray declaration key (a
+  `relationSorts('tgos', …)` typo) is refused and named by
+  `filament-mobile:doctor`, exactly like a stray `relationCard()`. Filters
+  stay out, permanently.
+
+- **`ToggleButtons` and `Slider` join the wire** as the new types
+  `toggle_buttons` and `slider`; `Placeholder` maps to the existing
+  `text_entry` (it extends `Infolists\Components\TextEntry`, so it is
+  read-only with no new machinery). `ViewField` stays unmapped **by design** —
+  an arbitrary Blade view has no data contract to read — and keeps the
+  drop-with-warning treatment.
+
+  A `toggle_buttons` node publishes `config.options` in the same flattened
+  shape `select`/`radio` use (the walker's option branch was widened, not
+  copied), an always-present `config.multiple` — the value is a scalar or a
+  `List`, the `select`/`multiselect` split — and never an `optionsUrl`: the
+  radio ruling, for the radio's reason. The `boolean()` preset needs no
+  special-casing; it publishes options `1`/`0`.
+
+  A `slider` node publishes always-present `config.min`/`max` (0/100
+  defaults), a `step` only when the declared step is numeric, and an
+  always-present `multiple`. Range mode is Filament's own
+  `is_array(getRawState())`, and `/schema` walks a deliberately unseeded
+  form, so the walker falls back to `is_array(getDefaultState())`: a range
+  slider publishes `multiple: true` there only when declared with an array
+  `->default([...])`. **A range slider with no array default publishes
+  `multiple: false` on `/schema` while its rules still say `array`** — a
+  documented weakness; `/state` re-answers from real state.
+
+- **`RuleExtractor` re-derives a slider's bounds.** `Slider::setUp()`
+  force-registers `numeric`/`min:`/`max:` and `integer`/`multiple_of:{step}`
+  behind rule closures keyed off raw state — invisible to the ordinary
+  accessor reads — so the extractor rebuilds the single-slider bounds from
+  `getMinValue()`/`getMaxValue()`/`getStep()` (the WithPadding variants
+  first, folding `rangePadding` into the enforced bound), and answers
+  `array`/`list` for a range, whose per-element rules already ride the
+  existing `name.*` nested-recursive machinery. The walker's published
+  `rules` hints read the same accessors, so hint and gate cannot drift.
+
+- **A submitted value for a `Placeholder` is refused with a `201`, not a
+  `500`** — the name is never admitted to the write, so there is no column
+  for a bad write to reach. Pinned by `PlaceholderTest`.
+
+- Fixtures and goldens: six P10 fields on the `BannerResource` fixture (both
+  sliders declared `->required(false)`, because `Slider::setUp()`
+  force-registers `required` and a required field would 422 every
+  pre-existing create test — a bare-component test pins the `required`
+  publication instead). `contract/laravel-panel.json` regenerated (+134
+  lines, purely additive); `contract/panel.json` hand-extended with both new
+  shapes.
+
 ## 0.7.0 — 2026-08-13
 
 - **The README shows the app now.** Its images had drifted a long way from the

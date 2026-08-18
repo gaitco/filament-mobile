@@ -36,6 +36,15 @@ final class MobileResource
     /** @var list<string> */
     private array $actions = [];
 
+    /** @var array<string, list<string>> relation key => searchable columns */
+    private array $relationSearchable = [];
+
+    /** @var array<string, array<string, string>> relation key => (sort key => label) */
+    private array $relationSorts = [];
+
+    /** @var array<string, array{key: string, direction: string}> relation key => default */
+    private array $relationDefaultSorts = [];
+
     private function __construct()
     {
         $this->card = MobileCard::make();
@@ -103,6 +112,78 @@ final class MobileResource
     public function getRelationCardKeys(): array
     {
         return array_keys($this->relationCards);
+    }
+
+    /**
+     * Per-relation search columns, keyed by relationship name. A relation is
+     * a smaller list, not a different philosophy: same host-declared opt-in
+     * as searchable(), never table introspection.
+     *
+     * A key naming no relation is the misdeclaration this cannot catch here —
+     * same as relationCard()'s docblock above. `RelationDiscovery` refuses it
+     * and `doctor` names it.
+     *
+     * @param  list<string>  $columns
+     */
+    public function relationSearchable(string $relation, array $columns): self
+    {
+        $this->relationSearchable[$relation] = array_values($columns);
+
+        return $this;
+    }
+
+    /**
+     * Per-relation sorts, keyed by relationship name — sorts() at one level
+     * down, with the same dangling-default ruling.
+     *
+     * @param  array<string, string>  $labels  sort key => human label
+     */
+    public function relationSorts(string $relation, array $labels): self
+    {
+        $this->relationSorts[$relation] = $labels;
+
+        // The sorts() ruling, per relation: a default that points at nothing
+        // would vanish from relationSortsToArray() while applySort() still
+        // ordered by it.
+        $default = $this->relationDefaultSorts[$relation] ?? null;
+
+        if ($default !== null && ! array_key_exists($default['key'], $labels)) {
+            unset($this->relationDefaultSorts[$relation]);
+        }
+
+        return $this;
+    }
+
+    /**
+     * The relation's default sort — defaultSort() at one level down, with the
+     * same declaration-time refusals: an undeclared key (checked against THIS
+     * relation's sorts, so a typo'd relation name cannot borrow the
+     * resource's) and a direction that is neither asc nor desc after
+     * lowercasing.
+     */
+    public function relationDefaultSort(string $relation, string $key, string $direction = 'asc'): self
+    {
+        if (! array_key_exists($key, $this->relationSorts[$relation] ?? [])) {
+            throw new InvalidArgumentException(
+                "relationDefaultSort('{$relation}', '{$key}') is not one of the relation's declared sorts. "
+                . "Call relationSorts('{$relation}', …) with this key first.",
+            );
+        }
+
+        // Lowercased and rejected when it is neither, for the same reason
+        // defaultSort() is: `DESC` verbatim fails the Dart parser's closed
+        // enum and throws on the *whole* panel document.
+        $direction = strtolower($direction);
+
+        if (! in_array($direction, ['asc', 'desc'], true)) {
+            throw new InvalidArgumentException(
+                "relationDefaultSort('{$relation}', '{$key}', '{$direction}') must be 'asc' or 'desc'.",
+            );
+        }
+
+        $this->relationDefaultSorts[$relation] = ['key' => $key, 'direction' => $direction];
+
+        return $this;
     }
 
     /** @param list<string> $columns */
@@ -207,6 +288,46 @@ final class MobileResource
         return $this->actions;
     }
 
+    /** @return list<string> */
+    public function getRelationSearchable(string $relation): array
+    {
+        return $this->relationSearchable[$relation] ?? [];
+    }
+
+    /** @return array<string, string> */
+    public function getRelationSorts(string $relation): array
+    {
+        return $this->relationSorts[$relation] ?? [];
+    }
+
+    public function getRelationDefaultSortKey(string $relation): ?string
+    {
+        return $this->relationDefaultSorts[$relation]['key'] ?? null;
+    }
+
+    public function getRelationDefaultSortDirection(string $relation): string
+    {
+        return $this->relationDefaultSorts[$relation]['direction'] ?? 'asc';
+    }
+
+    /** @return list<string> */
+    public function getRelationSearchableKeys(): array
+    {
+        return array_keys($this->relationSearchable);
+    }
+
+    /** @return list<string> */
+    public function getRelationSortsKeys(): array
+    {
+        return array_keys($this->relationSorts);
+    }
+
+    /** @return list<string> */
+    public function getRelationDefaultSortKeys(): array
+    {
+        return array_keys($this->relationDefaultSorts);
+    }
+
     /**
      * Contract §5.2 `sorts` shape. The `default` key is present only on the
      * flagged sort — the Dart parser reads a missing `default` as false.
@@ -224,6 +345,36 @@ final class MobileResource
                 'key' => $key,
                 'label' => $label,
                 'direction' => $isDefault ? $this->defaultSortDirection : 'asc',
+            ];
+
+            if ($isDefault) {
+                $sort['default'] = true;
+            }
+
+            $sorts[] = $sort;
+        }
+
+        return $sorts;
+    }
+
+    /**
+     * The sortsToArray() shape for one relation's declarations — empty when
+     * the relation declares none, which is every relation on a server that
+     * never opted this one in.
+     *
+     * @return list<array<string, mixed>>
+     */
+    public function relationSortsToArray(string $relation): array
+    {
+        $sorts = [];
+
+        foreach ($this->getRelationSorts($relation) as $key => $label) {
+            $isDefault = $key === $this->getRelationDefaultSortKey($relation);
+
+            $sort = [
+                'key' => $key,
+                'label' => $label,
+                'direction' => $isDefault ? $this->getRelationDefaultSortDirection($relation) : 'asc',
             ];
 
             if ($isDefault) {

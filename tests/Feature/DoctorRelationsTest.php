@@ -55,6 +55,18 @@ it('names a relationCard() key that matches no relation', function () {
         ->assertExitCode(0);
 });
 
+it('names relation search/sort declaration keys that match no relation', function () {
+    // P11: the same typo can now land in three more maps, and the refusal
+    // names the method so the author finds the line, not just the key. One
+    // expectsOutputToContain per printed line — Testbench lets exactly one
+    // expectation claim each line (see the note on the first test above).
+    $this->artisan('filament-mobile:doctor')
+        ->expectsOutputToContain("relationSearchable('bannerz') matches no relation")
+        ->expectsOutputToContain("relationSorts('bannerz') matches no relation")
+        ->expectsOutputToContain("relationDefaultSort('bannerz') matches no relation")
+        ->assertExitCode(0);
+});
+
 it('names a relation whose relationship does not resolve on the model', function () {
     $this->artisan('filament-mobile:doctor')
         ->expectsOutputToContain('GhostsRelationManager: relationship [ghosts] does not resolve')

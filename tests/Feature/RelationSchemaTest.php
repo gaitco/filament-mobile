@@ -116,3 +116,27 @@ it('publishes the host-declared relation card in place of the derived one', func
 
     expect($relations[0]['card']['title']['field'])->toBe('status');
 });
+
+it('publishes search and sorts on every relation node, false and [] when undeclared', function () {
+    // P11: always present on a current server, like the resource block's own
+    // keys — a client branches on absence only for a server predating P11.
+    // CompanyResource declares nothing for its banners relation.
+    $relations = schemaFor('companies')['relations'];
+
+    expect($relations[0])->toHaveKey('search')
+        ->and($relations[0]['search'])->toBe(['enabled' => false])
+        ->and($relations[0])->toHaveKey('sorts')
+        ->and($relations[0]['sorts'])->toBe([]);
+});
+
+it('publishes the declared relation search and sorts shapes', function () {
+    // BannerResource declares relationSearchable/relationSorts/
+    // relationDefaultSort for `tags` — the same shapes the resource block
+    // publishes at the top level, one level down.
+    $tags = collect(schemaFor('banners')['relations'])->firstWhere('key', 'tags');
+
+    expect($tags['search'])->toBe(['enabled' => true])
+        ->and($tags['sorts'])->toBe([
+            ['key' => 'name', 'label' => 'Name', 'direction' => 'asc', 'default' => true],
+        ]);
+});

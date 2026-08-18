@@ -9,6 +9,7 @@ use Gait\FilamentMobile\Authorizer;
 use Gait\FilamentMobile\Introspection\FormDefaults;
 use Gait\FilamentMobile\Introspection\RelationDiscovery;
 use Gait\FilamentMobile\Introspection\TagSeparators;
+use Gait\FilamentMobile\MobileResource;
 use Gait\FilamentMobile\RecordSerializer;
 use Gait\FilamentMobile\ResourceRegistry;
 use Gait\FilamentMobile\Write\RecordForm;
@@ -44,7 +45,7 @@ final class RelationController
 
     public function __invoke(Request $request, string $resource, string $id, string $relation): JsonResponse
     {
-        [, $published, $record, $relationship, $related] = $this->resolve($request, $resource, $id, $relation);
+        [, $published, $record, $relationship, $related, $mobile] = $this->resolve($request, $resource, $id, $relation);
 
         // Gate 3 — the child model's own viewAny. Redundant with Filament's
         // DEFAULT canViewForRecord (which calls authorize('viewAny', $model)),
@@ -61,6 +62,22 @@ final class RelationController
         // omits a relation entirely, so the endpoint for one was never
         // published either and the 404 above has already fired.
         $card = $published['card'];
+
+        // P11: the index's search/sort, against THIS relation's declarations
+        // and strictly after the last gate — a 422 for a bad parameter must
+        // never outrun a 403/404 and confirm the relation exists. The
+        // relationship's own builder, so the where group lands inside the
+        // relationship constraint rather than beside it.
+        $query = $relationship->getQuery();
+
+        ListQuery::applySearch($query, ListQuery::stringQuery($request, 'search'), $mobile->getRelationSearchable($relation));
+        ListQuery::applySort(
+            $query,
+            $request,
+            $mobile->getRelationSorts($relation),
+            $mobile->getRelationDefaultSortKey($relation),
+            $mobile->getRelationDefaultSortDirection($relation),
+        );
 
         // The same N+1 defence `index()` applies, for the same reason and
         // from the same source: `relationPaths()` is derived from the card's
@@ -266,7 +283,7 @@ final class RelationController
      * from discovery (one resolution, one answer), never from a second
      * findByModel() at request time.
      *
-     * @return array{0: class-string|null, 1: array<string, mixed>, 2: Model, 3: Relation, 4: Model}
+     * @return array{0: class-string|null, 1: array<string, mixed>, 2: Model, 3: Relation, 4: Model, 5: MobileResource}
      */
     private function resolve(Request $request, string $resource, string $id, string $relation, bool $forWrite = false): array
     {
@@ -334,6 +351,10 @@ final class RelationController
             $record,
             $relationship,
             $relationship->getRelated(),
+            // The read endpoint's per-relation search/sort declarations live
+            // here (P11) — returned so ListQuery reads the same resolution
+            // the gates already ran against.
+            $mobile,
         ];
     }
 

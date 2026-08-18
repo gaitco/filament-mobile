@@ -96,10 +96,14 @@ class PostResource extends Resource
                 // makes the Dart side's time-bound parse provable against real
                 // server output rather than hand-written JSON. `opens_at` also
                 // turns seconds OFF against `closes_at`'s vendor default of
-                // ON, so neither can stand in for a hard-coded value.
+                // ON, so neither can stand in for a hard-coded value. P13
+                // adds the step grid: `opens_at` is stepped to quarter hours,
+                // `closes_at` stays at the vendor default of 1, so the golden
+                // proves both halves of publish-only-when-greater-than-1.
                 TimePicker::make('opens_at')
                     ->minDate('09:00')
                     ->maxDate('17:00')
+                    ->minutesStep(15)
                     ->seconds(false),
                 TimePicker::make('closes_at'),
                 // The second wire shape, in the golden rather than only as a
@@ -111,6 +115,15 @@ class PostResource extends Resource
                 // same gap Task 1 closed for date bounds.
                 TimePicker::make('reminder_at')
                     ->minDate(Carbon::parse('2026-01-01 09:00')),
+                // P13 Task 1: a datetime stepped on all three axes, so the
+                // golden carries a real server-emitted hoursStep/
+                // minutesStep/secondsStep triple for the Dart contract test
+                // to parse — the same reason the bounded pair above exists.
+                // Column-less like `tags`/`views`: walked, not written.
+                DateTimePicker::make('booked_at')
+                    ->hoursStep(2)
+                    ->minutesStep(30)
+                    ->secondsStep(15),
             ]),
             // P8 Task 3. A non-default format, not hex, is what makes the
             // Dart contract test parse a genuine `rgba` node out of real

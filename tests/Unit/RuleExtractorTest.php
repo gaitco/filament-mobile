@@ -175,18 +175,18 @@ it('skips constraint accessors a component type does not define, such as Toggle'
     expect($rules)->toBe(['flag' => ['required']]);
 });
 
-it('withholds a rule from a multiple-file field, which is the one name the walker emits and this does not', function () {
-    // No rule means no key in the validated array, and the validated array is
-    // the mass-assignment whitelist — so a MULTIPLE file value can never be
-    // written (this slice, P6a, has nowhere to save more than one path per
-    // column). Asserted alongside the walker so the exception stays a *known*
-    // one field wide rather than quietly growing.
-    //
-    // A SINGLE-file field is no longer this exception: RuleExtractor narrowed
-    // the withholding to multiple-only, so it carries a rule like any other
-    // leaf. See RuleExtractorTest's sibling assertions and WritableNamesTest.
+it('admits a multiple-file field with container rules, declared count bounds and a per-element string rule', function () {
+    // P12: a multiple field's value is a List<String> of stored paths, saved
+    // wholesale like a repeater's — so its name enters the rules (and with
+    // them the mass-assignment whitelist) with `array`/`list` on the
+    // CONTAINER, the declared maxFiles/minFiles as COUNT rules (Laravel's
+    // min/max on an array count its elements — Filament's own
+    // getValidationRules() shapes a multiple field identically), and a
+    // per-element `string` under `name.*` so a crafted `[1, 2]` 422s keyed
+    // `attachments.0`. Per-FILE constraints (mimetypes, size) do not travel
+    // as rules — the upload endpoint enforces those per file.
     $components = [
-        Filament\Forms\Components\FileUpload::make('gallery')->multiple(),
+        Filament\Forms\Components\FileUpload::make('attachments')->multiple()->required()->maxFiles(3)->minFiles(1),
         TextInput::make('name')->required(),
     ];
 
@@ -194,8 +194,32 @@ it('withholds a rule from a multiple-file field, which is the one name the walke
         (new SchemaWalker(new WalkWarnings()))->walk($components, 'test-resource'),
     );
 
-    expect(RuleExtractor::fromComponents($components))->toBe(['name' => ['required']])
-        ->and($walkerNames)->toEqualCanonicalizing(['gallery', 'name']);
+    expect(RuleExtractor::fromComponents($components))->toBe([
+        'attachments' => ['array', 'list', 'required', 'max:3', 'min:1'],
+        'attachments.*' => ['string'],
+        'name' => ['required'],
+    ])->and($walkerNames)->toEqualCanonicalizing(['attachments', 'name']);
+});
+
+it('admits an undeclared multiple-file field with the container rules alone', function () {
+    expect(RuleExtractor::fromComponents([
+        Filament\Forms\Components\FileUpload::make('gallery')->multiple(),
+    ]))->toBe([
+        'gallery' => ['array', 'list'],
+        'gallery.*' => ['string'],
+    ]);
+});
+
+it('still withholds a file field whose multiple() gate throws', function () {
+    // The throw-must-not-admit rule is unchanged by P12: isMultiple()
+    // answering neither true nor false keeps the field out of the rules,
+    // so out of the validated payload, so the column can be neither written
+    // nor cleared — the same closed answer the walker (readOnly: true,
+    // unwritable) and the upload resolver (403) give on this throw.
+    expect(RuleExtractor::fromComponents([
+        Filament\Forms\Components\FileUpload::make('boom')->multiple(fn () => throw new RuntimeException('broken gate')),
+        TextInput::make('name'),
+    ]))->toBe(['name' => ['nullable']]);
 });
 
 it('keys its validation attributes exactly as it keys its rules', function () {
@@ -212,8 +236,9 @@ it('keys its validation attributes exactly as it keys its rules', function () {
             // names — `items.*.leaked` never surfaces as a bare top-level
             // `leaked` that could collide with an unrelated field.
             Repeater::make('items')->schema([TextInput::make('leaked')]),
-            // Multiple, deliberately: a single-file field now carries a rule
-            // like any other leaf and would defeat the point of this fixture.
+            // Multiple, deliberately: since P12 it is the two-name leaf —
+            // the container AND its per-element `gallery.*` — so this pins
+            // that the attribute keying follows even that starred name.
             FileUpload::make('gallery')->multiple()->required(),
         ]),
         TextInput::make('plain'),
@@ -221,7 +246,7 @@ it('keys its validation attributes exactly as it keys its rules', function () {
 
     expect(array_keys(RuleExtractor::attributesFrom($components)))
         ->toBe(array_keys(RuleExtractor::fromComponents($components)))
-        ->toBe(['vat_number', 'items', 'items.*.leaked', 'plain']);
+        ->toBe(['vat_number', 'items', 'items.*.leaked', 'gallery', 'gallery.*', 'plain']);
 });
 
 it('reads the label into the attribute, not the column name', function () {

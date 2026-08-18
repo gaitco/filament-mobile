@@ -61,6 +61,15 @@ class Banner extends Model implements HasRichContent
         'restricted_meta' => 'array',
         'restricted_meta_2' => 'array',
         'exploding_meta' => 'array',
+        // P10: a multiple ToggleButtons' value is a List on the wire and in
+        // the column, and a range Slider's is a two-element List.
+        'toggle_flags' => 'array',
+        'price_range' => 'array',
+        // P12: a multiple file field's value is a List<String> of stored
+        // paths — the array cast is what lets the write path save one
+        // directly and seedBannerWith() plant one.
+        'gallery' => 'array',
+        'attachments' => 'array',
     ];
 
     /**

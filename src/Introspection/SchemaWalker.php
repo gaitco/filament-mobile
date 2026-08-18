@@ -281,16 +281,18 @@ final class SchemaWalker
         //
         // `file` is checked by type, not by FieldPersistence::neverPersists():
         // an ordinary FileUpload dehydrates and has no relationship, so the
-        // component-level predicate has nothing to catch here. Only MULTIPLE
-        // stays unwritable — RuleExtractor withholds its rule for the same
-        // reason (nowhere to save more than one path per column). A
-        // single-file field carries a rule since P6a and is an ordinary
-        // writable string column: its stored value is the path the upload
-        // endpoint hands back, saved by the unmodified write path. See
-        // config(), which publishes the same distinction as readOnly, and
-        // isMultipleFile() below — the one read both places share, so the
-        // two cannot drift the way they did before this task.
-        if ($this->isMultipleFile($component, $node['type'], $resource, $name) || $neverPersists) {
+        // component-level predicate has nothing to catch here. Since P12 a
+        // MULTIPLE file field is writable too — RuleExtractor admits its
+        // rule (a List<String> of stored paths, saved wholesale like a
+        // repeater's), so the only file field still unwritable is one whose
+        // isMultiple() cannot ANSWER: fileMultiplicity() reads null on that
+        // throw, the extractor withholds the rule on the same throw, and
+        // UploadFieldResolver refuses the upload through the same
+        // WritableNames — all three sites still give the one closed answer.
+        // See config(), which publishes the same distinction as readOnly.
+        if ($neverPersists
+            || ($node['type'] === 'file'
+                && $this->fileMultiplicity($component, $node['type'], $resource, $name) === null)) {
             $node['writable'] = false;
         }
 
@@ -402,21 +404,37 @@ final class SchemaWalker
     /**
      * The one read node() and config() both key their `file` handling off,
      * so "unwritable" and "readOnly" cannot silently disagree the way they
-     * did before this task — `node()` had its own independent `=== 'file'`
-     * check and `config()` a separate unconditional one. Through read(),
-     * like every other closure here: a throwing `isMultiple()` degrades this
-     * one field's config rather than the whole document, falling back to
-     * `true` — multiple, so published `readOnly: true` and unwritable. The
-     * CLOSED answer, deliberately: this is the closure writability keys off,
-     * and `false` here offered a control `UploadFieldResolver::resolve()`
-     * (whose own try/catch refuses the same throw) would 403 on every
-     * upload. `RuleExtractor` withholds the rule on the same throw (its
-     * `!== false` check reads the null the same way), so the walker, the
-     * extractor and the resolver all give the same closed answer.
+     * did before this method existed — `node()` had its own independent
+     * `=== 'file'` check and `config()` a separate unconditional one.
+     *
+     * Three answers, because P12 made multiplicity itself a supported
+     * distinction rather than a refusal:
+     *
+     *  - `false` — a single-file field: ordinary writable string column.
+     *  - `true` — a multiple field: writable since P12, a List<String> of
+     *    stored paths, published editable with `multiple: true`.
+     *  - `null` — not a file component at all, or an isMultiple() gate that
+     *    THREW. The throw is the closed answer every site must share:
+     *    RuleExtractor withholds the rule on it (its `is_bool` check reads
+     *    the null the same way), UploadFieldResolver refuses the upload
+     *    through the same WritableNames, and this walker publishes
+     *    `writable: false` + `readOnly: true` here. Admitting on a throw
+     *    fails OPEN — a control whose every upload 403s, plus a PUT that
+     *    could write or clear the column.
+     *
+     * Through read(), like every other closure here: on a throw the
+     * fallback (null) is what distinguishes "cannot answer" from a real
+     * bool, and read() still records the warning.
      */
-    private function isMultipleFile(object $component, string $type, string $resource, ?string $name): bool
+    private function fileMultiplicity(object $component, string $type, string $resource, ?string $name): ?bool
     {
-        return $type === 'file' && (bool) $this->read($component, 'isMultiple', $resource, $name, 'multiple', true);
+        if ($type !== 'file') {
+            return null;
+        }
+
+        $multiple = $this->read($component, 'isMultiple', $resource, $name, 'multiple');
+
+        return is_bool($multiple) ? $multiple : null;
     }
 
     /**
@@ -568,16 +586,26 @@ final class SchemaWalker
     /** @return array<string, mixed> */
     private function config(object $component, string $type, string $resource, ?string $name, string $resourceKey, bool $insideRepeater = false): array
     {
-        // Upload is P6a. Multiple stays read-only — nowhere to save more than
-        // one path per column this slice, mirroring RuleExtractor's own
-        // narrowing. A single-file field genuinely persists (the upload
-        // endpoint hands back a path, the ordinary write path saves it like
-        // any other string column), so it publishes editable plus the two
-        // constraints the server enforces regardless — these are hints for a
-        // client to pre-filter and pre-warn with, never the gate.
+        // Upload is P6a; multiple is P12. A file field genuinely persists
+        // (the upload endpoint hands back a path per file, the ordinary
+        // write path saves a single path like any other string column, or a
+        // List<String> of paths wholesale for a multiple field), so it
+        // publishes editable plus the constraints the server enforces
+        // regardless — these are hints for a client to pre-filter and
+        // pre-warn with, never the gate. `multiple` is ALWAYS present: an
+        // absent key means a server predating P12, and a client must never
+        // invent a capability the server did not declare.
         if ($type === 'file') {
-            if ($this->isMultipleFile($component, $type, $resource, $name)) {
-                return ['readOnly' => true];
+            $multiple = $this->fileMultiplicity($component, $type, $resource, $name);
+
+            // A multiplicity gate that cannot answer refuses the field —
+            // the closed answer RuleExtractor (withholds the rule) and
+            // UploadFieldResolver (not in WritableNames → 403) give on the
+            // same throw. `multiple: true` is the closed PUBLISHED shape:
+            // the field is read-only either way, and a client must never
+            // render a stored value of unknown multiplicity as one path.
+            if ($multiple === null) {
+                return ['readOnly' => true, 'multiple' => true];
             }
 
             // read()'s fallback collapses "never configured" (a legitimate
@@ -597,10 +625,10 @@ final class SchemaWalker
             [$maxSize, $maxSizeFailed] = $this->readFileConstraint($component, 'getMaxSize', $resource, $name, 'maxSize');
 
             if ($acceptFailed || $maxSizeFailed) {
-                return ['readOnly' => true];
+                return ['readOnly' => true, 'multiple' => $multiple];
             }
 
-            $config = ['readOnly' => false];
+            $config = ['readOnly' => false, 'multiple' => $multiple];
 
             if ($accept !== null) {
                 $config['accept'] = $accept;
@@ -608,6 +636,24 @@ final class SchemaWalker
 
             if ($maxSize !== null) {
                 $config['maxSize'] = $maxSize;
+            }
+
+            // Count bounds, present only when the field declared them — a
+            // closure that throws degrades that one key through read(), as
+            // usual. Single-file fields never carry them: min/max ITEMS are
+            // meaningless for one path.
+            if ($multiple) {
+                $maxFiles = $this->read($component, 'getMaxFiles', $resource, $name, 'maxFiles');
+
+                if (is_int($maxFiles)) {
+                    $config['maxFiles'] = $maxFiles;
+                }
+
+                $minFiles = $this->read($component, 'getMinFiles', $resource, $name, 'minFiles');
+
+                if (is_int($minFiles)) {
+                    $config['minFiles'] = $minFiles;
+                }
             }
 
             return $config;
@@ -765,14 +811,39 @@ final class SchemaWalker
             // seconds() closure degrades that one bound to its fallback
             // (null / false), never the whole document — the same rule every
             // other branch here already follows.
-            return [
+            $config = [
                 'minDate' => $this->read($component, 'getMinDate', $resource, $name, 'minDate'),
                 'maxDate' => $this->read($component, 'getMaxDate', $resource, $name, 'maxDate'),
                 'seconds' => (bool) $this->read($component, 'hasSeconds', $resource, $name, 'seconds', false),
             ];
+
+            // P13: the step grid joins the wire — hoursStep/minutesStep/
+            // secondsStep, each published ONLY when its evaluated value beats
+            // the vendor default of 1 (measured in vendor: all three are
+            // closure-backed ints, `evaluate(...) ?? 1`), so an absent key
+            // means 1. `date` nodes carry none: DatePicker inherits the
+            // accessors from DateTimePicker and would answer them, but a
+            // date has no time grid for a step to act on.
+            //
+            // Fallback 1 through read(): a throwing step closure degrades
+            // that one key to absence, exactly like the bounds above. These
+            // keys state what the field was configured with for a host
+            // rendering its own picker — the reorderable precedent, not a
+            // promise of server-side enforcement (the web panel has none).
+            if ($type !== 'date') {
+                foreach (['hoursStep' => 'getHoursStep', 'minutesStep' => 'getMinutesStep', 'secondsStep' => 'getSecondsStep'] as $key => $method) {
+                    $step = $this->read($component, $method, $resource, $name, $key, 1);
+
+                    if (is_int($step) && $step > 1) {
+                        $config[$key] = $step;
+                    }
+                }
+            }
+
+            return $config;
         }
 
-        if (in_array($type, ['select', 'multiselect', 'radio'], true)) {
+        if (in_array($type, ['select', 'multiselect', 'radio', 'toggle_buttons'], true)) {
             // Through read(), like every other closure: a throwing
             // isSearchable() costs this one field's inlining decision, not the
             // whole /schema document.
@@ -782,7 +853,10 @@ final class SchemaWalker
             // Select (measured in vendor) — but it has no isSearchable() at
             // all (no Concerns\CanBeSearchable), so read()'s method_exists
             // guard alone already makes $searchable permanently false for
-            // it, with no extra branch needed.
+            // it, with no extra branch needed. `toggle_buttons` (P10) widens
+            // it again on the same grounds: ToggleButtons uses that same
+            // HasOptions trait and getOptions(), and has no isSearchable()
+            // either.
             //
             // Read BEFORE getOptions(), not after: Filament's own
             // getOptionsFromRelationship() returns null — and so getOptions()
@@ -823,7 +897,9 @@ final class SchemaWalker
             // inlines every option rather than publish an affordance that
             // cannot work; the panel author's list, however long, is the only
             // list this package can offer on a control with no search box.
-            if ($type !== 'radio' && (($searchable && $options === []) || count($flat) > $cap)) {
+            // `toggle_buttons` takes the same ruling (P10): no search
+            // affordance, no endpoint, never an `optionsUrl`.
+            if (! in_array($type, ['radio', 'toggle_buttons'], true) && (($searchable && $options === []) || count($flat) > $cap)) {
                 return [
                     'optionsUrl' => '/' . trim((string) config('filament-mobile.prefix'), '/')
                         . '/' . $resourceKey . '/options',
@@ -831,11 +907,71 @@ final class SchemaWalker
                 ];
             }
 
+            // `multiple` is ALWAYS present on a toggle_buttons, a stated gate
+            // like a repeater's `readOnly`: the wire value is a scalar
+            // (single) or a List (multiple) — exactly the select/multiselect
+            // split — and an absent key must never leave the client guessing.
+            // Published even when the option list is empty, so it is not
+            // collateral of the `$flat === []` fallback below. The boolean()
+            // preset needs no special-casing: it publishes options 1/0 and
+            // the value travels as declared.
+            if ($type === 'toggle_buttons') {
+                $config = [
+                    'multiple' => (bool) $this->read($component, 'isMultiple', $resource, $name, 'multiple', false),
+                ];
+
+                if ($flat !== []) {
+                    $config['options'] = $flat;
+                }
+
+                return $config;
+            }
+
             if ($flat === []) {
                 return [];
             }
 
             return ['options' => $flat];
+        }
+
+        if ($type === 'slider') {
+            // P10. `min`/`max` are getMinValue()/getMaxValue() — always
+            // present, and the accessors answer the vendor defaults 0/100 on
+            // an unconfigured field, which read()'s fallbacks mirror. `step`
+            // is published only when getStep() answers an int or float: a
+            // string or null step means "any step", and absence of the key is
+            // that answer, never an error.
+            //
+            // `multiple` is always present and is isMultiple(), which vendor
+            // computes as `is_array($this->getRawState())` — the raw STATE,
+            // not a configured flag (there is no multiple() method). On the
+            // empty /schema snapshot no state is seeded at all, so the raw
+            // state is null even for a range slider — the array DEFAULT is
+            // the one detectable signal there, and is what the fallback read
+            // below keys off. A range slider with no array default still
+            // publishes `multiple: false` while its server-side rules say
+            // `array`: the design spec's stated, accepted weakness — the
+            // client renders from the node and a 422 keyed to the field
+            // decides anything the hint got wrong.
+            $multiple = (bool) $this->read($component, 'isMultiple', $resource, $name, 'multiple', false);
+
+            if (! $multiple) {
+                $multiple = is_array($this->read($component, 'getDefaultState', $resource, $name, 'default'));
+            }
+
+            $config = [
+                'min' => $this->read($component, 'getMinValue', $resource, $name, 'min', 0),
+                'max' => $this->read($component, 'getMaxValue', $resource, $name, 'max', 100),
+                'multiple' => $multiple,
+            ];
+
+            $step = $this->read($component, 'getStep', $resource, $name, 'step');
+
+            if (is_int($step) || is_float($step)) {
+                $config['step'] = $step;
+            }
+
+            return $config;
         }
 
         $config = [];
@@ -927,6 +1063,33 @@ final class SchemaWalker
             // the client would otherwise measure a length where Laravel
             // compares a value — blocking a submission the server accepts.
             $rules['numeric'] = true;
+        }
+
+        if (ComponentTypeMap::for($component) === 'slider') {
+            // P10: a slider's bounds are VALUE bounds, which getMaxLength()/
+            // getMinLength() above cannot see — Slider has no length
+            // constraint, its setUp() force-registers numeric + min:/max:
+            // against the value instead (measured in vendor). Published here
+            // from the same accessors RuleExtractor::rulesFor() enforces
+            // from, so hint and gate cannot drift: the WithPadding variant
+            // first (rangePadding folds into the enforced bound — publishing
+            // the padding separately would double-count it), the plain one as
+            // the fallback for a Filament line that predates it.
+            $rules['numeric'] = true;
+
+            $sliderMin = $this->read($component, 'getMinValueWithPadding', $resource, $name, 'min')
+                ?? $this->read($component, 'getMinValue', $resource, $name, 'min');
+
+            if (is_int($sliderMin) || is_float($sliderMin)) {
+                $rules['min'] = $sliderMin;
+            }
+
+            $sliderMax = $this->read($component, 'getMaxValueWithPadding', $resource, $name, 'max')
+                ?? $this->read($component, 'getMaxValue', $resource, $name, 'max');
+
+            if (is_int($sliderMax) || is_float($sliderMax)) {
+                $rules['max'] = $sliderMax;
+            }
         }
 
         if ($this->read($component, 'isEmail', $resource, $name, 'email', false)) {
