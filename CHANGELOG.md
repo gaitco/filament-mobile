@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+No changes to the package. Released to exercise the tag-triggered release
+path end to end — the Dart side of that release carries a packaging fix, and
+the three version lines move together through `scripts/release.sh`.
+
 ## 0.8.0 — 2026-08-18
 
 P10–P13 ship: the remaining field types (`ToggleButtons`, `Slider`,
