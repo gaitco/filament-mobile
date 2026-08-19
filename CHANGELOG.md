@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.8.1 — 2026-08-19
 
 No changes to the package. Released to exercise the tag-triggered release
 path end to end — the Dart side of that release carries a packaging fix, and
