@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Gait\FilamentMobile;
+namespace Gait\MobileCore;
 
 use Illuminate\Auth\Access\Response;
 use Illuminate\Contracts\Auth\Authenticatable;

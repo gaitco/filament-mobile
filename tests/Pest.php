@@ -82,6 +82,24 @@ function keySorted(mixed $value): mixed
     return $value;
 }
 
+/**
+ * A 1x1 PNG's real bytes, for a test that attaches media to a model whose
+ * `registerMediaConversions()` runs a conversion `->nonQueued()` (Gallery's
+ * `thumb`, P14) — GD/Imagick decode the file synchronously, so literal
+ * placeholder bytes like `'fake-image-bytes'` throw `CouldNotLoadImage`
+ * rather than skip the conversion.
+ */
+function fakePngBytes(): string
+{
+    $image = imagecreatetruecolor(1, 1);
+    ob_start();
+    imagepng($image);
+    $bytes = ob_get_clean();
+    imagedestroy($image);
+
+    return $bytes;
+}
+
 function makeUser(string $name): User
 {
     return User::create([

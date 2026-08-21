@@ -44,6 +44,63 @@ the server itself normalises an unrecognised value to; a client should
 never treat the key's absence as an error. `laravel-panel.json` is
 regenerated from a real request and does carry both keys.
 
+## `panel.locales` and the node-level `translatable` key
+
+P17 adds one more `panel` key and one more form-node key, both additive:
+
+```jsonc
+"panel": {
+  "id": "mobile",
+  "locale": "en",
+  "direction": "ltr",
+  "locales": ["ar", "en"]
+}
+```
+
+`panel.locales` is a **flat `list<string>`, in the order the panel
+declared them** — either the official
+`filament/spatie-laravel-translatable-plugin`'s own locales when that
+plugin is registered, or `config('filament-mobile.locales')` for a panel
+built on this package's own manual dotted-field convention
+(`caption.ar`/`caption.en`) instead. **Absent — never `[]` — when neither
+source answers.** A client uses this array for chip ORDERING only; the
+chips a form actually renders come from the fields themselves, per the
+node-level key below, not from this list. Never derive a locale from a
+dotted field name alone: a `category.name` `BelongsTo` path is dotted too,
+and this key is the only evidence a field is genuinely per-locale.
+
+A translatable form node gains one more key, only when it is true:
+
+```jsonc
+{ "type": "text", "name": "caption.ar", "translatable": true }
+```
+
+`translatable` is published **only when `true`** — the same
+only-when-present shape as `writable` and `placeholder` — on a leaf whose
+`name` is **dotted** and whose head segment (everything before the first
+dot) is one of the underlying model's real translatable attributes. It is
+never `false`, never on an undotted field (see `DoctorCommand`'s
+Translatable diagnostic for that shape — the official plugin's own
+one-field-per-locale convention, which mobile edits at whatever locale the
+request resolves to, with no switcher of its own), and never on a dotted
+field that merely looks like one (a `caption.ar`/`caption.en` pair on a
+model with only an `'array'` cast and no real `HasTranslations` trait
+stays unannotated — see `record-payload.json`'s sibling reasoning for why a
+fixture with no real feature-backing keeps a golden byte-identical). A
+client derives `{attribute, locale}` by splitting `name` at its **last**
+dot — the server publishes no second copy of a fact the name already
+carries — and groups sibling `translatable` leaves that share the same
+head into one chip-switched field instead of rendering N stacked
+"Ar"/"En"-labelled fields.
+
+**`panel.json` and `laravel-panel.json` carry neither key, deliberately**
+— the same "server predating this feature" fixture role
+`panel.locale`/`direction` already established above: no fixture behind
+either golden has a real `HasTranslations` model, a registered
+translatable plugin, or a `filament-mobile.locales` config value, so both
+keys staying absent from both goldens is a structural guarantee, not a
+maintenance step someone can forget.
+
 ## Reading `hidden` and `disabled` as a client
 
 `hidden` does not mean the same thing on the two endpoints, and only one of
@@ -913,6 +970,52 @@ same loop `laravel-panel.json` closes for `/schema`:
   row's record key IS its `name` — live proof of the rule that a relation
   row is parsed by the relation's own `recordKey`, never an assumed `id`.
   Do not "fix" the missing `id`.
+
+## `media-record.json` and Spatie medialibrary fields
+
+A third generated golden, same family as `dashboard.json` and
+`record-payload.json`: `GET /{resource}/{record}` through a fixture resource
+(`GalleryResource`) built on `spatie/laravel-medialibrary`'s Filament
+components — a `SpatieMediaLibraryFileUpload` multiple collection (`photos`)
+and single collection (`cover`), the latter also shown by a
+`SpatieMediaLibraryImageEntry`. Laravel's `MediaSnapshotTest` generates it
+(`UPDATE_SNAPSHOTS=1 vendor/bin/pest tests/Feature/MediaSnapshotTest.php`);
+the Dart contract test reads it beside `record_payload_contract_test.dart`.
+
+**`record-payload.json` stays media-free, deliberately.** Its fixture
+(`RichResource`) has no `HasMedia` model, so it keeps answering "server
+without this feature" — the same role `panel.json` plays for `direction` and
+`laravel-panel.json`'s registered-resources default plays for `galleries`
+(`GalleryResource` is never in `TestCase`'s shared list, for exactly that
+reason — see its own docblock). A media field's wire shape is inseparable
+from Spatie's own `Media` model, so — like the dashboard — there is no useful
+hand-written fixture to maintain separately from what the real endpoint
+actually emits.
+
+A media path publishes two flat sibling keys on `data`: the path itself
+carries the raw uuid (a scalar for a single collection, a `List<String>` for
+`->multiple()`), and `<path>.__media` carries one item per file —
+`{uuid, url, thumbUrl, name, size, mime}`, `thumbUrl` `null` when the field's
+model registers no matching non-queued conversion. See
+`laravel/filament-mobile/README.md`'s medialibrary section for the read and
+write paths in full.
+
+**Determinism: every uuid, url and file size on this payload is runtime- or
+environment-random**, unlike every other generated golden here — a fresh
+uuid per test run, urls built from `APP_URL` plus that uuid, a PNG's exact
+byte size varying with the host's GD/libpng build. `MediaSnapshotTest`
+normalises all three through one shared function
+(`normaliseMediaPayload()`, applied identically when the golden is written
+and when it is asserted against) before either encodes the payload:
+
+- each real uuid becomes `"uuid-1"`, `"uuid-2"`, … in encounter order across
+  the `data` array's `*.__media` siblings, and every occurrence of that uuid
+  — the raw `photos`/`cover` value and the matching `__media` item alike —
+  maps to the same placeholder, so which media is which still survives.
+- `url` becomes `"https://media.test/{n}/{name}"` and a non-null `thumbUrl`
+  becomes `"https://media.test/{n}/thumb-{name}"`, `{n}` being that media's
+  placeholder index and `{name}` its already-deterministic real file name.
+- `size` becomes a fixed `100` for every item.
 
 ## `rules.url`, `rules.regex` and `rules.confirmed`
 

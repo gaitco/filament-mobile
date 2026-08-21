@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 use Filament\Forms\Components\TimePicker;
 use Gait\FilamentMobile\Introspection\SchemaWalker;
-use Gait\FilamentMobile\Introspection\WalkWarnings;
+use Gait\MobileCore\WalkWarnings;
 
 /**
  * Task 2 of P8. `TimePicker` is five lines in vendor — `extends

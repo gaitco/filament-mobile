@@ -30,6 +30,16 @@ return [
     // panel is booted — or to serve a deliberate subset.
     'resources' => null,
 
+    // The panel's declared translation locales, published as `panel.locales`
+    // for a client to order per-locale field chips by. Null (the default)
+    // publishes nothing unless the official
+    // `filament/spatie-laravel-translatable-plugin` is registered on the
+    // panel, in which case ITS locales win. Set this only for a panel built
+    // on this package's own manual dotted-field convention
+    // (`caption.ar`/`caption.en`) with no such plugin — a flat list, e.g.
+    // `['ar', 'en']`.
+    'locales' => null,
+
     // Dashboard widgets exposed to mobile, by class name, in publication
     // order. Empty by default and never auto-discovered: a widget runs
     // arbitrary queries, so a panel must name each one it wants on a phone.

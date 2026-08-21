@@ -500,6 +500,26 @@ it('respects the configured prefix in the emitted url', function () {
         ->toBe('/api/admin/banners/options');
 });
 
+describe('resource badge', function () {
+    it('publishes the web sidebar count badge, colour and all', function () {
+        config()->set('filament-mobile.resources', [
+            \Gait\FilamentMobile\Tests\Fixtures\Resources\BadgedCompanyResource::class,
+        ]);
+
+        expect(resourceBlock('badged-companies')['badge'])
+            ->toBe(['value' => '124', 'color' => 'warning']);
+    });
+
+    it('omits badge entirely when a resource declares none', function () {
+        // Absent, not null — same rule as `group`.
+        config()->set('filament-mobile.resources', [
+            \Gait\FilamentMobile\Tests\Fixtures\Resources\CompanyResource::class,
+        ]);
+
+        expect(resourceBlock('companies'))->not->toHaveKey('badge');
+    });
+});
+
 describe('resource group', function () {
     beforeEach(function () {
         config()->set('filament-mobile.resources', [
@@ -535,5 +555,33 @@ describe('resource group', function () {
         // Every accessor this package reads goes through SafeEvaluator for the
         // same reason: one resource must not cost the whole document.
         expect(resourceBlock('broken-group'))->not->toHaveKey('group');
+    });
+});
+
+describe('entry target', function () {
+    it('publishes a target on a dotted entry whose BelongsTo has exactly one opted-in owner', function () {
+        config()->set('filament-mobile.resources', [
+            \Gait\FilamentMobile\Tests\Fixtures\Resources\LinkedEntryBannerResource::class,
+            \Gait\FilamentMobile\Tests\Fixtures\Resources\CompanyResource::class,
+        ]);
+
+        $entry = collect(resourceBlock('linked-banners')['infolist'])
+            ->firstWhere('name', 'company.name');
+
+        expect($entry['config']['target'])
+            ->toBe(['resource' => 'companies', 'record' => 'company.id']);
+    });
+
+    it('publishes no target when no opted-in resource owns the related model', function () {
+        // Same entry, but Company has no resource in this panel — half a
+        // target is worse than none.
+        config()->set('filament-mobile.resources', [
+            \Gait\FilamentMobile\Tests\Fixtures\Resources\LinkedEntryBannerResource::class,
+        ]);
+
+        $entry = collect(resourceBlock('linked-banners')['infolist'])
+            ->firstWhere('name', 'company.name');
+
+        expect($entry)->not->toHaveKey('config');
     });
 });

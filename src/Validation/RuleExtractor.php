@@ -49,12 +49,18 @@ final class RuleExtractor
      * whose disabled gate throws) are already dropped by the descent's
      * fail-closed refusal.
      *
-     * Two shapes arrive here: a multi-valued relationship field (a
-     * `Select::multiple()->relationship()`, a `CheckboxList::relationship()`)
-     * and, since P9, a relationship REPEATER — minted by the descent's
-     * repeater branch as a whole-array leaf with no per-item rules, saved by
+     * Three shapes arrive here: a multi-valued relationship field (a
+     * `Select::multiple()->relationship()`, a `CheckboxList::relationship()`);
+     * since P9, a relationship REPEATER — minted by the descent's repeater
+     * branch as a whole-array leaf with no per-item rules, saved by
      * Filament's own `Repeater::saveToRelationship()` when the pass calls
-     * `saveRelationships()`.
+     * `saveRelationships()`; and, since P14, a Spatie media upload — which
+     * does NOT go through `saveRelationships()` at all (there is no Eloquent
+     * relation to save), but reaches `RecordForm::saveRelations()`'s own
+     * `MediaReconciler` branch instead. All three share the one property this
+     * method exists to answer: none may ever gain a rule, or its value would
+     * enter the validated payload and `update()` would write it as a column
+     * that does not exist.
      *
      * `&& $entry['writable']` matters since P6c Task 2: a relation-write
      * field nested INSIDE a repeater's item template (e.g. a

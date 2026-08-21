@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Gait\FilamentMobile\Introspection;
+namespace Gait\MobileCore;
 
 /**
  * Everything the walker could not handle. A schema that silently loses a field

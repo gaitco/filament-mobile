@@ -3,7 +3,6 @@
 declare(strict_types=1);
 
 use Gait\FilamentMobile\Dashboard\WidgetReader;
-use Gait\FilamentMobile\Introspection\WalkWarnings;
 use Gait\FilamentMobile\Tests\Fixtures\Widgets\BrokenParentWidget;
 use Gait\FilamentMobile\Tests\Fixtures\Widgets\CountingChartWidget;
 use Gait\FilamentMobile\Tests\Fixtures\Widgets\DeniedWidget;
@@ -18,6 +17,7 @@ use Gait\FilamentMobile\Tests\Fixtures\Widgets\ThrowingDataWidget;
 use Gait\FilamentMobile\Tests\Fixtures\Widgets\ThrowingGateWidget;
 use Gait\FilamentMobile\Tests\Fixtures\Widgets\UnrenderableLabelChartWidget;
 use Gait\FilamentMobile\Tests\Fixtures\Widgets\UnrenderableValueWidget;
+use Gait\MobileCore\WalkWarnings;
 
 function reader(?WalkWarnings $warnings = null): WidgetReader
 {

@@ -5,8 +5,8 @@ declare(strict_types=1);
 namespace Gait\FilamentMobile\Http;
 
 use Gait\FilamentMobile\Dashboard\WidgetReader;
-use Gait\FilamentMobile\Introspection\WalkWarnings;
 use Gait\FilamentMobile\PanelSchemaBuilder;
+use Gait\MobileCore\WalkWarnings;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 

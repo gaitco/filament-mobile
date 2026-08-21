@@ -4,9 +4,9 @@ declare(strict_types=1);
 
 namespace Gait\FilamentMobile\Http;
 
-use Gait\FilamentMobile\Authorizer;
 use Gait\FilamentMobile\ResourceRegistry;
 use Gait\FilamentMobile\Upload\UploadFieldResolver;
+use Gait\MobileCore\Authorizer;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Str;
@@ -51,8 +51,15 @@ final class UploadController
      * package's test suite needs exactly that. Widen deliberately, not by
      * falling through to Symfony's table — if a real panel needs `.zip` or
      * similar, add it here by name.
+     *
+     * Public so `Write\MediaReconciler` can recognise the exact shape a
+     * minted path takes (uuid + one of these, or no extension at all) when
+     * it decides whether a submitted "add" token is a stored path this
+     * endpoint actually produced — reusing this list rather than
+     * duplicating it is what keeps that check from drifting if this one is
+     * ever widened.
      */
-    private const SAFE_EXTENSIONS = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'pdf'];
+    public const SAFE_EXTENSIONS = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'pdf'];
 
     public function __construct(private readonly ResourceRegistry $registry) {}
 

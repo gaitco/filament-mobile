@@ -188,6 +188,7 @@ fields the infolist names.
 | [Resources and cards](#opt-a-resource-in) | Opt in per resource; the card is declared, the form and infolist are read from the resource |
 | [Actions](#actions) | The panel's own record actions, published per record with their authorization already applied |
 | [Upload](#upload) | Single- and multi-file `FileUpload` / `SpatieMediaLibraryFileUpload`, with the field's own accept and size rules enforced per file |
+| [Medialibrary](#medialibrary) | `spatie/laravel-medialibrary` fields and entries — media UUIDs plus a full-metadata sibling, wholesale-replaced on save |
 | [Repeater](#repeater) | JSON-column repeaters, validated per row |
 | [Radio](#radio) | Real radio buttons, sharing `Select`'s own options |
 | [Toggle buttons](#toggle-buttons) | `ToggleButtons` — single or multiple, always inlined, never a search URL |
@@ -226,6 +227,7 @@ database rather than at validation.
 | `ToggleButtons` | `toggle_buttons` | same options shape; `->multiple()` publishes `multiple: true`; always inlines, never an `optionsUrl` |
 | `CheckboxList` | `multiselect` | |
 | `TagsInput` | `tags` | per-tag rules enforced; a `->separator()` is mirrored into the stored column |
+| `SpatieTagsInput` | `tags` | wholesale sync through Filament's own relationship closure, not the column write above; no separator participation; per-tag rules unenforced (see [Spatie tags](#spatie-tags)) |
 | `KeyValue` | `keyvalue` | four gates published as **client hints**, not enforced on write |
 | `Toggle` | `toggle` | |
 | `Slider` | `slider` | single or range; range mode is detected from an array `->default()` on `/schema` (see [Slider](#slider)) |
@@ -235,7 +237,8 @@ database rather than at validation.
 | `TimePicker` | `time` | same; a bound may be a bare `09:00` or a full datetime |
 | `ColorPicker` | `color` | in the format the panel declared, never converted |
 | `FileUpload` | `file` | single or `->multiple()`; a multiple field's value is a List of stored paths, count bounds enforced on write |
-| `SpatieMediaLibraryFileUpload` | `file` | same |
+| `SpatieMediaLibraryFileUpload` | `file` | same shape, but the value is media **UUID** strings, not paths, and saving reconciles the whole collection — see [Medialibrary](#medialibrary) |
+| `SpatieMediaLibraryImageEntry` | `image_entry` | infolist-only, read-only; card-bound the same way `leadingImage()` already works — see [Medialibrary](#medialibrary) |
 | `RichEditor` | `textarea` | **edited as raw HTML**; it renders as a document on read (see [Rich text](#rich-text)) but editing is still markup |
 | `Repeater` | `repeater` | JSON-column or `->relationship()`; only when **every** child round-trips |
 | `Hidden` | — | deliberately skipped from the wire; its `->default()` still applies on create |
@@ -484,6 +487,111 @@ them up; a host that wants that prunes the storage directory on its own
 schedule (e.g. delete anything older than N days with no matching row). No
 claim-on-save handshake exists to avoid this — that would be a second
 subsystem beside the one being built.
+
+## Medialibrary
+
+`spatie/laravel-medialibrary`'s own Filament components —
+`SpatieMediaLibraryFileUpload` and `SpatieMediaLibraryImageEntry` — work on
+mobile the way the plain ones already do, plus a media collection actually
+renders: a media-backed path publishes a flat sibling beside its raw value,
+the same pattern `.__rich` already established for rich text.
+
+```jsonc
+// a ->multiple() field; a single-file field's raw value is one uuid String
+{
+  "id": 7,
+  "photo": ["9a1f6c…-uuid"],            // the field's VALUE: media UUID strings
+  "photo.__media": [
+    {
+      "uuid": "9a1f6c…-uuid",
+      "url": "https://…/photo.jpg",
+      "thumbUrl": "https://…/conversions/photo-thumb.jpg",
+      "name": "photo.jpg",
+      "size": 34211,
+      "mime": "image/jpeg"
+    }
+  ]
+}
+```
+
+**The raw key keeps the P12 invariant: a `List<String>` for a multiple field,
+a `String` for a single one, everywhere** — `/state`, a record, a write body.
+For a medialibrary field the strings are media **UUIDs**, never storage
+paths; the P12-era "stored paths" reading of that key is superseded by this
+sibling wherever a medialibrary field is in play. `__media` is always a
+list, one entry per media item in the collection's own order — also for a
+single-file field (one element or none) — the same "one shape, no inference"
+rule `multiple` itself follows. `thumbUrl` is the `thumb` conversion's URL
+when the collection declares one, else `null`; `url` is always the original,
+and both come from medialibrary's own `getUrl()`, never a `Storage::url()`
+guess. A genuinely empty collection publishes `photo.__media: []`; a model
+without `HasMedia`, a non-media path, or an old server omit the key
+entirely — absence means "no media information", never an error, the same
+split `relations: []`-versus-absent already uses. The sibling appears on
+`GET /{resource}/{record}`, both write response bodies, relation rows, and
+**list rows when a card slot is bound to the media path** (`leadingImage()`
+keeps its existing signature; the binding is by field name against the
+resource's own media paths, no new card API) — never on `/schema`, which is
+record-scoped like `actions`.
+
+**Uploading is unchanged** (see [Upload](#upload) above): one file per call,
+still `{"path": …}`, still a stored path with no media row yet — a value
+only becomes a media UUID after the save that consumes it. On save, a
+Spatie upload is reconciled against the model's collection, wholesale, the
+same replacement model P12 already pinned for a plain multiple file field:
+
+- a submitted string that is an existing media UUID on this record's
+  collection is **kept**;
+- a submitted string that is a stored path from the upload endpoint is
+  consumed into the library (`addMediaFromDisk()->toMediaCollection(...)`);
+- an existing media item whose UUID the submission omits is **deleted**;
+- a field the submission never mentions is untouched (absence is not
+  emptiness); a present `[]` clears the whole collection.
+- a submitted UUID that belongs to another record or another collection
+  is refused with a `422` keyed to the field — the same addressing-boundary
+  rule relation writes already follow.
+- a request naming more than one medialibrary field reconciles all of them
+  together, atomically: one field 422ing never leaves another already
+  applied.
+
+**Gated on the model actually having `HasMedia`**, detected by
+`method_exists`/FQCN string, never a runtime dependency on the package —
+`spatie/laravel-medialibrary` is a **dev** dependency of this package. A
+Spatie component on a model without `HasMedia`, or one whose `collection()`
+closure throws, publishes `readOnly: true` — fail-closed, the same shape a
+throwing constraint closure already gets — and `doctor` names why.
+
+### `doctor` diagnostics
+
+Three medialibrary-specific findings, none of them fatal to the CI exit
+code — informational, the same as an unresolvable card path or a
+prose-only card field:
+
+- a media component (upload or entry) on a model without `HasMedia` — the
+  field always reads empty (a form upload additionally gets an actionable
+  line under "Unsupported components", since it is also published
+  `readOnly: true`);
+- a media component whose name collides with a real column on the model's
+  table — the media pass overwrites the column's raw value at that same
+  key in the payload, almost certainly an accidental collision rather than
+  a deliberate shadow;
+- a card slot bound to a media path on a model without `HasMedia` — the
+  slot will always publish `null`, since the sibling pass that would fill
+  it never runs.
+
+### Known weaknesses, stated now
+
+- **No curation UI beyond what the file field already offers** — no
+  reordering, no per-media custom properties, no responsive-images markup.
+  Wholesale replacement stays the write model.
+- **`SpatieMediaLibraryImageColumn` on a relation card is not supported.**
+  The two-column derivation `RelationCard::fromColumns()` uses would title a
+  card with an image; that stays the existing degrade-to-null and is named
+  by `doctor` like any other unresolvable card path.
+- **An old client ignores the sibling and renders the raw UUID string as if
+  it were the stored filename** — degraded but functional, not wrong: the
+  file field still shows *something* selected, just not a real name. A new
+  client against an old server sees no sibling at all: exactly today's null.
 
 ## Repeater
 
@@ -992,6 +1100,236 @@ mobile looser than web.
   rather than reading it generically.** A future Filament release changing
   that method's behaviour would silently diverge from this package's copy —
   see "The separator mirror" above for the test that would catch it.
+
+## Spatie tags
+
+`filament/spatie-laravel-tags-plugin`'s `SpatieTagsInput` — over
+`spatie/laravel-tags`' `HasTags` — works on mobile exactly like a plain
+`TagsInput` above: the same `tags` node, the same `List<String>` wire value,
+prefilled with the record's tag names and saved wholesale on write. No new
+wire shape, no new type: a panel migrating a plain tags column onto
+`HasTags` changes nothing on the client.
+
+```php
+SpatieTagsInput::make('tags')                 // any type
+SpatieTagsInput::make('topics')->type('topics') // scoped to one type
+```
+
+both publish an ordinary `tags` node. **`separator` never appears in its
+`config`, even if declared** — a Spatie field has no column of its own (it
+saves through Filament's own relationship closure, below), so there is
+nothing to implode a delimited string into, and publishing
+`getSeparator()`'s answer anyway would be a hint that lies about what the
+write path does with the value. `suggestions` still publishes, from the tag
+table as ever.
+
+**The write is wholesale sync, not this package's own column write.**
+`RecordForm::saveRelations()` gates the field (`HasTags` present, `type()`
+resolvable — both fail-closed; the walker already dropped either shape from
+`/schema`, see "`doctor` diagnostics" below), then falls through to
+`$component->saveRelationships()` — Filament's own `syncTagsWithType()` /
+any-type sync, unchanged. That means the submitted list **is** the whole new
+set for that type: `[]` clears every tag, a field the request never
+mentions (or mentions as `null`) is left untouched, and a mix of kept/new
+tag names is reconciled in one call, the same "wholesale replacement" model
+`Medialibrary` uses for a collection.
+
+**An any-type field's sync is wholesale over the ENTIRE relation, typed tags
+included — stated plainly, not left implicit.** `SpatieTagsInput::make('tags')`
+(no `->type()`) calls `syncTagsWithAnyType()`, which is Spatie's own
+`tags()->sync()` under the hood — there is no type scoping to the any-type
+field's own tags, because an any-type field has no type to scope by. An
+any-type `[]` therefore clears every tag on the record, `topics`-scoped ones
+included, and an any-type field's published/synced value is every tag name
+regardless of type — a resource declaring both `SpatieTagsInput::make('tags')`
+and `SpatieTagsInput::make('topics')->type('topics')` has the any-type field
+silently absorb and clear the typed one on every write that touches it.
+
+**Enforced before the sync, with a field-keyed `422`:**
+
+- every element of the submitted list must be a non-empty, non-whitespace
+  string — a non-string element would otherwise reach Filament's own
+  `findOrCreate()` and fail with a `500`, and a whitespace-only one
+  (`" "`) would mint a tag indistinguishable from "no tag" once trimmed
+  for display;
+- `->required()` refuses an empty list, on update AND (final review) an
+  absent field on create — relation-write names carry no Laravel
+  validation rule of their own, so nothing else on mobile enforces it, the
+  same reasoning `Medialibrary`'s `isRequired()` gate follows.
+
+**Per-tag `nestedRecursiveRules` (e.g. `max:20`) are not enforced for a
+Spatie-backed field** — unlike the plain `TagsInput` case above, which does
+enforce them. Stated now, not silently: this is the one thing a panel
+migrating from `TagsInput` to `SpatieTagsInput` loses.
+
+**`getSuggestions()` queries the entire tag table, per field, per `/schema`
+request — unbounded, and this matches the web panel's own cost.** A Spatie
+tags field's `suggestions` (like the plain `TagsInput` case) is read straight
+off `getSuggestions()`, which the plugin overrides to query every row of the
+tag table when no explicit suggestion list is set. A panel with a large tag
+table pays that query on every `/schema` build, once per Spatie tags field —
+noted here beside `Medialibrary`'s equivalent caveats, not a regression this
+slice introduces.
+
+### `doctor` diagnostics
+
+Three Spatie-tags findings, none fatal to the CI exit code on their own —
+informational, the same as the medialibrary trio:
+
+- a `SpatieTagsInput` on a model without `HasTags` — the field always reads
+  empty (also actionable under "Unsupported components", since the walker
+  drops the field from `/schema` entirely rather than publishing it — no
+  client honours `readOnly` on a `tags` node);
+- a `SpatieTagsInput` whose name collides with a real column on the model's
+  table — the tags pass overwrites the column's raw value at that same key
+  in the payload;
+- a card slot bound to a Spatie tags path on a model without `HasTags` —
+  the slot always publishes `[]` (also actionable under "Unsupported
+  components", for the same reason: the underlying field is the same
+  dropped-from-`/schema` shape as the first diagnostic above).
+
+## Sluggable
+
+`spatie/laravel-sluggable`'s `HasSlug` needs no special handling from this
+package at all — a slug field is published and written exactly like any
+other plain `TextInput`, because that is exactly what it is: `HasSlug` hooks
+the model's own `creating`/`updating` events, not the form layer, so nothing
+here has anything to gate, disable, or hint.
+
+The vendor's generation rule (unchanged by this package, and identical to
+what the web panel already does with the same form) is:
+
+- a **changed** slug value is kept verbatim — spatie may still suffix it
+  (`-2`, `-3`, …) on a collision with an existing row, the same as web;
+- an **empty** (or absent) slug generates a fresh one from the configured
+  source field (e.g. `title`);
+- an **unchanged** slug resubmitted while the source field changed is
+  **regenerated** from the new source value — the subtle case, because a
+  mobile edit screen that round-trips the whole record (this package's own
+  write model, same as `Medialibrary`'s and `Spatie tags`' "wholesale"
+  sections above) resubmits the stored slug alongside the changed title, and
+  spatie does not treat that resubmission as a deliberate custom value.
+
+A panel using `->preventOverwrite()`, `->generateSlugsOnUpdate(false)`, or
+any other `SlugOptions` combination behaves the same way on mobile as it
+does on web — none of those options change where the custom-value check
+runs, only when generation is attempted at all. `disabled: true` publishing
+was considered and rejected for this reason: it would remove the ability to
+submit a custom slug that the web panel's own form still has, in every
+`SlugOptions` shape. See
+`docs/superpowers/specs/2026-08-21-p16-sluggable-design.md` for the full
+refutation, and `tests/Feature/SluggableTest.php` for the pinning test that
+fails first if a vendor upgrade ever changes this.
+
+## Translatable
+
+`spatie/laravel-translatable`'s manual convention — a `TextInput::make`
+per locale, dotted onto the same attribute (`caption.ar` beside
+`caption.en`) — was already fully supported before this feature: two
+ordinary dotted `TextInput` nodes are indistinguishable from any other
+dotted path as far as the walker is concerned. What P17 adds is: the merge
+that is supposed to protect an unsubmitted locale now actually holds on a
+real `HasTranslations` model, and the schema carries enough metadata for a
+client to render one field with locale chips instead of N fields stacked
+under labels like "Ar" and "En".
+
+### The merge guarantee is now real
+
+`RecordForm::storedPaths()` preserves every dotted attribute a submission
+does not mention, so a `PUT` naming only `caption.en` must not wipe
+`caption.ar`. On a genuine `HasTranslations` model that guarantee was
+**not** holding: `$record->getAttribute('caption')` returns the *current
+locale's string*, never the locale map, so the method's `is_array()` guard
+silently skipped the attribute and preserved nothing. Only Spatie's own
+model-layer merge (`setTranslations()` re-reading `getTranslations()`
+before writing) was masking the gap — invisible on every fixture this
+package's own tests used, because none was built on the real trait.
+`storedPaths()` now reads a translatable attribute through
+`getTranslations($attribute)` instead — the same `method_exists` pair
+`RecordSerializer::read()` already gates on, never a
+`spatie/laravel-translatable` import — and gets the real per-locale map
+back. Pinned on a trait-backed fixture: the merge is asserted directly
+against `storedPaths()`'s own output, the endpoint round-trip is asserted
+separately, and a crafted `caption: []` is shown *not* to wipe stored
+locales.
+
+### `panel.locales`
+
+`/schema`'s `panel` block gains an optional `locales` key — a flat
+`list<string>`, e.g. `["en", "ar"]`. Two sources, tried in order, never
+merged:
+
+1. the official `filament/spatie-laravel-translatable-plugin`, when
+   registered on the resolved panel (`getDefaultLocales()`);
+2. else `config('filament-mobile.locales')` — the host declaration for a
+   panel built on the manual dotted-field convention, with no such plugin
+   registered;
+3. else the key is **absent, never `[]`**. A dotted field name is never
+   read as evidence of a locale — guessing one from `caption.ar` would
+   publish a fact the panel never declared.
+
+A client treats this list as chip **ordering** only. The chips themselves
+still come from the form's own `translatable` fields, which stay the
+source of truth for which locales actually exist.
+
+### The `translatable` annotation
+
+A leaf whose name is dotted, and whose head segment (everything before the
+first dot) is one of the model's own `getTranslatableAttributes()` — the
+same trait-detection gate the merge fix above uses — publishes
+`translatable: true`:
+
+```jsonc
+{ "type": "text", "name": "caption.ar", "translatable": true }
+```
+
+Only-when-true, the `writable`/`placeholder` precedent: never `false`,
+never on an undotted field, and never on a scalar sibling a collision
+fixture might declare (`caption` beside `caption.ar` stays untouched — the
+same collision shape the write path already refuses to conflate). A client
+derives `{attribute, locale}` by splitting the published `name` at its
+last dot; this key publishes only the one fact the name does not already
+carry — whether that split means anything.
+
+### The official plugin's divergence — and what `doctor` says about it
+
+`filament/spatie-laravel-translatable-plugin` takes a different shape
+entirely: one **undotted** `TextInput::make('caption')`, with the plugin
+itself swapping which locale's value that single field reads and writes
+as the panel's own locale changes. This package does not special-case
+that shape: mobile edits whichever locale `app()->getLocale()` resolves to
+at request time, for that field, and nothing on the wire lets a phone
+switch locale for it independently the way the chip group does for a
+dotted field. `filament-mobile:doctor` names every such field:
+
+```
+CompanyResource.caption: undotted field on a translatable attribute — mobile edits the panel's current locale only for this field
+```
+
+Informational only — it does not change `doctor`'s exit code. To let a
+phone edit every locale of that attribute independently, declare it the
+manual dotted way (`caption.ar` / `caption.en` side by side) instead.
+
+### Configuration
+
+```php
+// config/filament-mobile.php
+'locales' => ['en', 'ar'],   // only for the manual convention, no plugin registered
+```
+
+Leave it `null` (the default) when the official plugin is registered —
+its own `getDefaultLocales()` wins — or when no client-side chip ordering
+is needed at all.
+
+### Known weaknesses, stated now
+
+- **The official plugin's undotted fields stay single-locale on mobile.**
+  Editing every locale of one of those fields from a phone needs the
+  manual dotted convention instead; `doctor` names every field this
+  affects.
+- **`panel.locales` is ordering only.** A locale in that list with no
+  matching dotted field contributes no chip, and a dotted field the list
+  does not name still gets a chip, ordered after the ones it does name.
 
 ## Key/value
 
@@ -1903,9 +2241,12 @@ Reports which resources are exposed, which components could not be walked,
 drift between `mobile()` and `table()`, card paths that resolve to nothing,
 relations it refuses (with the reason), stray per-relation declarations (a
 `relationCard()`/`relationSorts()` key naming no relation the resource
-declares), and published relations whose rows
+declares), published relations whose rows
 are read-only because no single resource owns the child model —
-distinguishing zero owners from several, because the fixes differ.
+distinguishing zero owners from several, because the fixes differ — and
+[Medialibrary](#medialibrary)-specific findings: a media component on a
+model without `HasMedia`, one whose name collides with a real column, and a
+card slot bound to a media path with no `HasMedia` to read it from.
 Exits non-zero on anything actionable, so CI can gate on it.
 
 **In a policy-guarded panel, pass `--user`.** By default `doctor` builds the
@@ -1956,8 +2297,6 @@ Measured against a real 35-resource production panel.
   Key/value sections above. So do `ToggleButtons` and `Slider` — see the
   Toggle buttons and Slider sections above. None of the percentages above has
   been re-measured against the pilot panel since these shipped.
-- **A media-library image on a card serialises as `null`.** `leadingImage()`
-  needs a real attribute; there is no way to name a media collection yet.
 - **Badges carry the raw value**, not the formatted label. Supply the colour map
   yourself via `badge($field, $colors)`; the label is the client's job.
 - **`hidden` means different things on the two endpoints.** `/schema`'s value

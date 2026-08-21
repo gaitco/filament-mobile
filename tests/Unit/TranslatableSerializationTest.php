@@ -2,8 +2,10 @@
 
 declare(strict_types=1);
 
+use Gait\FilamentMobile\Introspection\RichContentAdapter;
+use Gait\FilamentMobile\Introspection\TagSeparatorAdapter;
 use Gait\FilamentMobile\MobileCard;
-use Gait\FilamentMobile\RecordSerializer;
+use Gait\MobileCore\RecordSerializer;
 use Illuminate\Database\Eloquent\Model;
 
 /**
@@ -57,7 +59,7 @@ function serializeWith(array $fields, Model $record): array
         $index === 0 ? $card->title($field) : $card->meta($field);
     }
 
-    return (new RecordSerializer($card, 'id'))->serialize($record);
+    return (new RecordSerializer($card, 'id', null, new RichContentAdapter(), new TagSeparatorAdapter()))->serialize($record);
 }
 
 it('serialises each translation of a dotted translatable path', function () {

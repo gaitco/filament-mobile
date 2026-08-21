@@ -5,14 +5,14 @@ declare(strict_types=1);
 namespace Gait\FilamentMobile\Http;
 
 use Filament\Schemas\Schema;
-use Gait\FilamentMobile\Authorizer;
 use Gait\FilamentMobile\Introspection\FormDefaults;
 use Gait\FilamentMobile\Introspection\HeadlessSchemaHost;
 use Gait\FilamentMobile\Introspection\SchemaWalker;
-use Gait\FilamentMobile\Introspection\WalkWarnings;
 use Gait\FilamentMobile\ResourceRegistry;
-use Gait\FilamentMobile\Write\SettledSchema;
 use Gait\FilamentMobile\Write\WritableNames;
+use Gait\MobileCore\Authorizer;
+use Gait\MobileCore\SettledSchema;
+use Gait\MobileCore\WalkWarnings;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -169,7 +169,7 @@ final class StateController
 
         $document = [
             'components' => $this->lockRefused(
-                (new SchemaWalker($warnings))->walk($components, class_basename($class), $resourceKey),
+                (new SchemaWalker($warnings))->walk($components, class_basename($class), $resourceKey, $class::getModel()),
                 // The final build's own answer is NOT what the write accepts:
                 // the allow-set only ever shrinks, so a name it dropped on an
                 // earlier pass stays dropped even when the reset makes the last

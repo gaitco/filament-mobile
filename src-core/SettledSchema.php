@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Gait\FilamentMobile\Write;
+namespace Gait\MobileCore;
 
 use Illuminate\Support\Arr;
 
@@ -38,14 +38,11 @@ final class SettledSchema
      * inlined so the derivation below and the parameter default cannot drift
      * apart.
      *
-     * The `int` is typed again, which it could not be while this package
-     * declared `php: ^8.2`: typed constants are 8.3, and a feature above the
-     * floor is a parse error rather than a degradation — the whole file fails
-     * to load, so nothing in the write path runs. It shipped exactly that way
-     * in v0.3.0–v0.5.0. The floor is now `^8.4`, the version this repo is
-     * developed on, so the gap that hid it no longer exists.
+     * @var int — untyped on purpose: typed constants are PHP 8.3 and this
+     * package's floor is ^8.2; a construct above the floor is a parse error,
+     * not a degradation (see scripts/lint-php-floor.sh for the history).
      */
-    private const int DEFAULT_MAX_PASSES = 32;
+    private const DEFAULT_MAX_PASSES = 32;
 
     /**
      * @param  array<string, mixed>  $state

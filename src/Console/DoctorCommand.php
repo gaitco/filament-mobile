@@ -11,13 +11,15 @@ use Gait\FilamentMobile\Dashboard\WidgetReader;
 use Gait\FilamentMobile\Introspection\ChildComponents;
 use Gait\FilamentMobile\Introspection\ComponentTypeMap;
 use Gait\FilamentMobile\Introspection\FieldPersistence;
+use Gait\FilamentMobile\Introspection\MediaFields;
 use Gait\FilamentMobile\Introspection\RelationDiscovery;
 use Gait\FilamentMobile\Introspection\RichContent;
-use Gait\FilamentMobile\Introspection\WalkWarnings;
+use Gait\FilamentMobile\Introspection\TagFields;
 use Gait\FilamentMobile\MobileResource;
 use Gait\FilamentMobile\PanelSchemaBuilder;
 use Gait\FilamentMobile\ResourceRegistry;
 use Gait\FilamentMobile\Validation\RuleExtractor;
+use Gait\MobileCore\WalkWarnings;
 use Illuminate\Console\Command;
 use Illuminate\Contracts\Auth\Authenticatable;
 use Illuminate\Database\Eloquent\Model;
@@ -71,6 +73,9 @@ final class DoctorCommand extends Command
         $repeaterProblems = $this->repeaterProblems($registry, $builder, $mobile, $panel);
         $relationRefusals = $this->relationRefusals($registry);
         $proseCards = $this->proseOnlyCardFields($registry, $mobile, $panel);
+        $mediaProblems = $this->mediaProblems($mobile, $builder);
+        $tagProblems = $this->tagProblems($mobile, $builder);
+        $translatableProblems = $this->translatableProblems($mobile, $builder);
 
         $this->exposure($registry, $mobile, $panel);
         $this->section('Unsupported components', [...$unsupported, ...$this->pasteLines($unsupported)]);
@@ -81,6 +86,9 @@ final class DoctorCommand extends Command
         $this->section('Repeaters', $repeaterProblems);
         $this->section('Relations', $relationRefusals);
         $this->section('Rich text on cards', $proseCards);
+        $this->section('Medialibrary', $mediaProblems);
+        $this->section('Spatie tags', $tagProblems);
+        $this->section('Translatable', $translatableProblems);
 
         // A resource nobody could walk is a hole in the gate, not a clean bill
         // of health: CI reads the exit code, not the prose above it.
@@ -730,6 +738,249 @@ final class DoctorCommand extends Command
         }
 
         return $lines;
+    }
+
+    /**
+     * Section 10 (P14). Three medialibrary findings the design spec's
+     * "Doctor" section names, none of them actionable — each is a defect in
+     * this SLICE's coverage of a legal declaration, the same reasoning
+     * unresolvableCardPaths()/proseOnlyCardFields() above already apply:
+     *
+     *  - a media component (upload OR entry) on a model without `HasMedia`.
+     *    A form UPLOAD in that shape already gets an ACTIONABLE line in the
+     *    "Unsupported components" section above — SchemaWalker's own
+     *    WalkWarnings entry (Task 2), read()'s 'file' type branch. What is
+     *    genuinely new here is the INFOLIST entry case: an entry carries no
+     *    `config.readOnly` for the walker to gate, so nothing else ever
+     *    names why it reads empty.
+     *  - a media component whose name collides with a real column: the
+     *    serializer's media pass (RecordSerializer::withMediaPaths())
+     *    OVERWRITES the raw column read at that same path, almost certainly
+     *    an accidental naming collision rather than a deliberate shadow.
+     *  - a card slot bound to a media path on a model without `HasMedia`:
+     *    the same serializer pass is gated on `method_exists($record,
+     *    'getMedia')`, so the slot publishes null on every list/relation
+     *    row, forever.
+     *
+     * Read off the raw components (`schemaComponents()`), the same source
+     * repeaterProblems()/refusedRepeaters() above use, not the published
+     * document — an infolist entry has no walked "config" shape at all to
+     * read this off of.
+     *
+     * @param  array<class-string, MobileResource>  $mobile
+     * @return list<string>
+     */
+    private function mediaProblems(array $mobile, PanelSchemaBuilder $builder): array
+    {
+        $lines = [];
+
+        foreach ($mobile as $class => $resource) {
+            $short = class_basename($class);
+            $model = new ($class::getModel())();
+            $hasMedia = method_exists($model, 'getMedia');
+            $cardPaths = $resource->getCard()->fieldPaths();
+
+            foreach (['form', 'infolist'] as $method) {
+                $this->walkMediaComponents(
+                    $builder->schemaComponents($class, $method),
+                    $short,
+                    $model,
+                    $hasMedia,
+                    $cardPaths,
+                    $lines,
+                );
+            }
+        }
+
+        return $lines;
+    }
+
+    /**
+     * @param  iterable<mixed>  $components
+     * @param  list<string>  $cardPaths
+     * @param  list<string>  $lines
+     */
+    private function walkMediaComponents(iterable $components, string $resourceName, Model $model, bool $hasMedia, array $cardPaths, array &$lines): void
+    {
+        foreach ($components as $component) {
+            if (! is_object($component)) {
+                continue;
+            }
+
+            $isUpload = MediaFields::isMediaUpload($component);
+            $isEntry = MediaFields::isMediaEntry($component);
+
+            if ($isUpload || $isEntry) {
+                $name = $this->componentName($component);
+                $kind = $isUpload ? 'SpatieMediaLibraryFileUpload' : 'SpatieMediaLibraryImageEntry';
+
+                if (is_string($name) && $name !== '') {
+                    if (! $hasMedia) {
+                        $lines[] = $resourceName . '.' . $name . ': ' . $kind
+                            . ' on a model without HasMedia — the field always reads empty';
+
+                        if (in_array($name, $cardPaths, true)) {
+                            $lines[] = $resourceName . ': card field `' . $name
+                                . '` is bound to a media path on a model without HasMedia — the slot will always publish null';
+                        }
+                    } elseif (in_array($name, $this->columnsOf($model) ?? [], true)) {
+                        $lines[] = $resourceName . '.' . $name . ': ' . $kind
+                            . ' collides with a real column of the same name — the media value will shadow the column in the payload';
+                    }
+                }
+            }
+
+            $this->walkMediaComponents(ChildComponents::of($component), $resourceName, $model, $hasMedia, $cardPaths, $lines);
+        }
+    }
+
+    /**
+     * P15 Task 4: three Spatie tags findings, the design spec's "Doctor"
+     * section, none of them actionable — the same `mediaProblems()`
+     * reasoning above. `SpatieTagsInput` is form-only (no infolist entry
+     * equivalent the way medialibrary has one), so unlike media's diagnostic
+     * (1), the traitless-model finding here has no informational-only
+     * fixture: `SchemaWalker::tagsFailClosed()` (Task 2) already drops that
+     * exact shape with a WalkWarnings entry, which the pre-existing
+     * "Unsupported components" section already folds into `$actionable` —
+     * this section's line is additional context on the SAME finding, not a
+     * second bug. Diagnostics (2) collision and (3) card-bound path on a
+     * traitless model are genuinely new and can be exercised in isolation.
+     *
+     *  - a Spatie tags component on a model without `HasTags`;
+     *  - a Spatie tags component whose name collides with a real column: the
+     *    serializer's tags pass (`RecordSerializer::withTagPaths()`)
+     *    overwrites the raw column read at that same path;
+     *  - a card slot bound to a Spatie tags path on a model without
+     *    `HasTags`: the same serializer pass is gated on
+     *    `method_exists($record, 'syncTagsWithType')`, so the slot publishes
+     *    `[]` on every list/relation row, forever.
+     *
+     * Read off the raw components (`schemaComponents()`), same source
+     * `mediaProblems()` uses — only `form`, since `SpatieTagsInput` never
+     * appears in an infolist.
+     *
+     * @param  array<class-string, MobileResource>  $mobile
+     * @return list<string>
+     */
+    private function tagProblems(array $mobile, PanelSchemaBuilder $builder): array
+    {
+        $lines = [];
+
+        foreach ($mobile as $class => $resource) {
+            $short = class_basename($class);
+            $model = new ($class::getModel())();
+            $hasTags = method_exists($model, 'syncTagsWithType');
+            $cardPaths = $resource->getCard()->fieldPaths();
+
+            $this->walkTagComponents(
+                $builder->schemaComponents($class, 'form'),
+                $short,
+                $model,
+                $hasTags,
+                $cardPaths,
+                $lines,
+            );
+        }
+
+        return $lines;
+    }
+
+    /**
+     * @param  iterable<mixed>  $components
+     * @param  list<string>  $cardPaths
+     * @param  list<string>  $lines
+     */
+    private function walkTagComponents(iterable $components, string $resourceName, Model $model, bool $hasTags, array $cardPaths, array &$lines): void
+    {
+        foreach ($components as $component) {
+            if (! is_object($component)) {
+                continue;
+            }
+
+            if (TagFields::isSpatieTags($component)) {
+                $name = $this->componentName($component);
+
+                if (is_string($name) && $name !== '') {
+                    if (! $hasTags) {
+                        $lines[] = $resourceName . '.' . $name . ': SpatieTagsInput on a model without HasTags — the field always reads empty';
+
+                        if (in_array($name, $cardPaths, true)) {
+                            $lines[] = $resourceName . ': card field `' . $name
+                                . '` is bound to a tags path on a model without HasTags — the slot will always publish an empty list';
+                        }
+                    } elseif (in_array($name, $this->columnsOf($model) ?? [], true)) {
+                        $lines[] = $resourceName . '.' . $name . ': SpatieTagsInput collides with a real column of the same name — the tags value will shadow the column in the payload';
+                    }
+                }
+            }
+
+            $this->walkTagComponents(ChildComponents::of($component), $resourceName, $model, $hasTags, $cardPaths, $lines);
+        }
+    }
+
+    /**
+     * P17 Task 2: the one informational Translatable diagnostic — an
+     * UNDOTTED form field whose name is one of the model's own real
+     * `getTranslatableAttributes()` (behind the same `method_exists` pair
+     * `SchemaWalker::translatableAttributesOf()` and
+     * `RecordForm::storedPaths()` both gate on, never a
+     * `spatie/laravel-translatable` import here). That shape is the official
+     * `filament/spatie-laravel-translatable-plugin`'s own convention — one
+     * field per attribute, swapped to the CURRENT locale by the plugin — and
+     * this package's mobile panel has no locale switcher of its own, so every
+     * write to that field travels through whatever locale the request
+     * resolves to. Never a WalkWarnings entry: the field is perfectly valid
+     * Filament and walks and writes fine, so this is purely context a host
+     * should see once, the same informational role `tagProblems()` plays for
+     * a column-collision finding.
+     *
+     * @param  array<class-string, MobileResource>  $mobile
+     * @return list<string>
+     */
+    private function translatableProblems(array $mobile, PanelSchemaBuilder $builder): array
+    {
+        $lines = [];
+
+        foreach (array_keys($mobile) as $class) {
+            $short = class_basename($class);
+            $model = new ($class::getModel())();
+
+            if (! method_exists($model, 'getTranslations') || ! method_exists($model, 'getTranslatableAttributes')) {
+                continue;
+            }
+
+            $this->walkTranslatableComponents(
+                $builder->schemaComponents($class, 'form'),
+                $short,
+                $model->getTranslatableAttributes(),
+                $lines,
+            );
+        }
+
+        return $lines;
+    }
+
+    /**
+     * @param  iterable<mixed>  $components
+     * @param  list<string>  $translatable
+     * @param  list<string>  $lines
+     */
+    private function walkTranslatableComponents(iterable $components, string $resourceName, array $translatable, array &$lines): void
+    {
+        foreach ($components as $component) {
+            if (! is_object($component)) {
+                continue;
+            }
+
+            $name = $this->componentName($component);
+
+            if (is_string($name) && $name !== '' && ! str_contains($name, '.') && in_array($name, $translatable, true)) {
+                $lines[] = $resourceName . '.' . $name . ": undotted field on a translatable attribute — mobile edits the panel's current locale only for this field";
+            }
+
+            $this->walkTranslatableComponents(ChildComponents::of($component), $resourceName, $translatable, $lines);
+        }
     }
 
     private function resolves(Model $model, string $segment): bool

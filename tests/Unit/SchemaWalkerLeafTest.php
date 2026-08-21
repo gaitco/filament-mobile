@@ -7,7 +7,7 @@ use Filament\Forms\Components\TextInput;
 use Filament\Forms\Components\Toggle;
 use Filament\Schemas\Schema;
 use Gait\FilamentMobile\Introspection\SchemaWalker;
-use Gait\FilamentMobile\Introspection\WalkWarnings;
+use Gait\MobileCore\WalkWarnings;
 
 function walk(array $components): array
 {

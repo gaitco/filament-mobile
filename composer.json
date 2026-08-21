@@ -2,14 +2,24 @@
     "name": "gait/filament-mobile",
     "description": "Serves an existing Laravel Filament panel as a mobile admin JSON contract.",
     "license": "MIT",
-    "keywords": ["laravel", "filament", "mobile", "flutter", "admin", "api"],
+    "keywords": [
+        "laravel",
+        "filament",
+        "mobile",
+        "flutter",
+        "admin",
+        "api"
+    ],
     "homepage": "https://github.com/gaitco/filament-mobile",
     "support": {
         "issues": "https://github.com/gaitco/filament-mobile/issues",
         "source": "https://github.com/gaitco/filament-mobile"
     },
     "authors": [
-        { "name": "Abdullah Ghanem", "email": "info@gaitco.com" }
+        {
+            "name": "Abdullah Ghanem",
+            "email": "info@gaitco.com"
+        }
     ],
     "require": {
         "php": "^8.4",
@@ -18,21 +28,36 @@
     },
     "require-dev": {
         "orchestra/testbench": "^10.0",
-        "pestphp/pest": "^3.8"
+        "pestphp/pest": "^3.8",
+        "spatie/laravel-medialibrary": "^11.0",
+        "filament/spatie-laravel-media-library-plugin": "^5.7",
+        "spatie/laravel-tags": "^4.12",
+        "filament/spatie-laravel-tags-plugin": "^5.7",
+        "spatie/laravel-sluggable": "^3.0",
+        "spatie/laravel-translatable": "^6.14"
     },
     "autoload": {
-        "psr-4": { "Gait\\FilamentMobile\\": "src/" }
+        "psr-4": {
+            "Gait\\FilamentMobile\\": "src/",
+            "Gait\\MobileCore\\": "src-core/"
+        }
     },
     "autoload-dev": {
-        "psr-4": { "Gait\\FilamentMobile\\Tests\\": "tests/" }
+        "psr-4": {
+            "Gait\\FilamentMobile\\Tests\\": "tests/"
+        }
     },
     "extra": {
         "laravel": {
-            "providers": ["Gait\\FilamentMobile\\FilamentMobileServiceProvider"]
+            "providers": [
+                "Gait\\FilamentMobile\\FilamentMobileServiceProvider"
+            ]
         }
     },
     "config": {
-        "allow-plugins": { "pestphp/pest-plugin": true }
+        "allow-plugins": {
+            "pestphp/pest-plugin": true
+        }
     },
     "minimum-stability": "stable"
 }

@@ -3,11 +3,13 @@
 declare(strict_types=1);
 
 use Gait\FilamentMobile\Introspection\RichContent;
+use Gait\FilamentMobile\Introspection\RichContentAdapter;
+use Gait\FilamentMobile\Introspection\TagSeparatorAdapter;
 use Gait\FilamentMobile\MobileCard;
-use Gait\FilamentMobile\RecordSerializer;
 use Gait\FilamentMobile\Tests\Fixtures\Models\Banner;
 use Gait\FilamentMobile\Tests\Fixtures\Resources\BannerResource;
 use Gait\FilamentMobile\Tests\Fixtures\Resources\RichResource;
+use Gait\MobileCore\RecordSerializer;
 
 /**
  * P6e Task 3: a rich column travels in three shapes, because three consumers
@@ -180,7 +182,7 @@ it('never converts a rich path whose stored value is not a string', function () 
     // column, which is exactly that shape.
     $banner = seedBannerWith(['name' => 'Sale', 'options' => ['type' => 'doc']]);
 
-    $payload = (new RecordSerializer((new MobileCard())->title('name'), 'id'))
+    $payload = (new RecordSerializer((new MobileCard())->title('name'), 'id', null, new RichContentAdapter(), new TagSeparatorAdapter()))
         ->withInfolistPaths(['options'])
         ->withRichPaths(['options'])
         ->serialize($banner);
@@ -214,7 +216,7 @@ it('converts a repeated rich value once per serializer, not once per row', funct
     // holding ONE body_html value ran 10 TipTap conversions, and a show()
     // with two rich columns sharing one string ran 2. index() serialises the
     // whole page through ONE RecordSerializer, so the memo lives there.
-    $serializer = (new RecordSerializer((new MobileCard())->title('name'), 'id'))
+    $serializer = (new RecordSerializer((new MobileCard())->title('name'), 'id', null, new RichContentAdapter(), new TagSeparatorAdapter()))
         ->withInfolistPaths(['body_html'])
         ->withRichPaths(['body_html']);
 
@@ -239,7 +241,7 @@ it('memoises a degraded conversion too, so a bad value does not re-throw per row
     // '123' takes envelopeFor()'s JSON branch and throws inside it (pinned in
     // RichContentTest) — the catch degrades to null. A page of such rows must
     // pay that throwing path once, not per row.
-    $serializer = (new RecordSerializer((new MobileCard())->title('name'), 'id'))
+    $serializer = (new RecordSerializer((new MobileCard())->title('name'), 'id', null, new RichContentAdapter(), new TagSeparatorAdapter()))
         ->withInfolistPaths(['body_html'])
         ->withRichPaths(['body_html']);
 
@@ -259,7 +261,7 @@ it('shares no memo across serializers — the next request converts for itself',
     // question HeadlessTableHost documents this package never asking. A fresh
     // serializer — the next request's — starts empty and converts again, so
     // nothing can leak across the boundary.
-    $make = fn (): RecordSerializer => (new RecordSerializer((new MobileCard())->title('name'), 'id'))
+    $make = fn (): RecordSerializer => (new RecordSerializer((new MobileCard())->title('name'), 'id', null, new RichContentAdapter(), new TagSeparatorAdapter()))
         ->withInfolistPaths(['body_html'])
         ->withRichPaths(['body_html']);
 

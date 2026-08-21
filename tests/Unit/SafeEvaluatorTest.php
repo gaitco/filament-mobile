@@ -2,8 +2,8 @@
 
 declare(strict_types=1);
 
-use Gait\FilamentMobile\Introspection\SafeEvaluator;
-use Gait\FilamentMobile\Introspection\WalkWarnings;
+use Gait\MobileCore\SafeEvaluator;
+use Gait\MobileCore\WalkWarnings;
 
 it('returns the read value when the closure succeeds', function () {
     $warnings = new WalkWarnings();

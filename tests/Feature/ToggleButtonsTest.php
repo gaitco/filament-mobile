@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 use Filament\Forms\Components\ToggleButtons;
 use Gait\FilamentMobile\Introspection\SchemaWalker;
-use Gait\FilamentMobile\Introspection\WalkWarnings;
+use Gait\MobileCore\WalkWarnings;
 
 /**
  * P10 Task 1: `ToggleButtons` becomes a mapped type, `toggle_buttons` on the

@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-use Gait\FilamentMobile\Write\SettledSchema;
+use Gait\MobileCore\SettledSchema;
 
 /**
  * A stand-in for a form: `build` reports which names it would write for a

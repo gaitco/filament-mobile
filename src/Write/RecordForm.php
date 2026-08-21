@@ -6,9 +6,14 @@ namespace Gait\FilamentMobile\Write;
 
 use Filament\Schemas\Schema;
 use Gait\FilamentMobile\Introspection\HeadlessSchemaHost;
+use Gait\FilamentMobile\Introspection\MediaFields;
+use Gait\FilamentMobile\Introspection\TagFields;
 use Gait\FilamentMobile\Validation\RuleExtractor;
+use Gait\MobileCore\SettledSchema;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Arr;
+use Illuminate\Validation\ValidationException;
+use Throwable;
 
 /**
  * The write-path form machinery every record-writing endpoint shares.
@@ -315,6 +320,18 @@ final class RecordForm
      * A list stays a leaf. Descending into one would reintroduce exactly the
      * merge-by-index corruption fillMissingPaths() exists to refuse.
      *
+     * `getAttribute($attribute)` is not enough for a translatable attribute:
+     * on a real `Spatie\Translatable\HasTranslations` model that accessor
+     * hands back the CURRENT LOCALE'S STRING, never the locale map — never an
+     * array, so `is_array()` below silently contributes nothing and this
+     * method's whole reason to exist (protecting a locale the payload does
+     * not mention) no-ops. Only Spatie's OWN model-layer merge
+     * (`setTranslations()` re-reading `getTranslations()` before writing) has
+     * been masking that, on every write that flows back through the model —
+     * this package's own merge must not depend on Spatie's. `method_exists`
+     * rather than a dependency: the same gate `RecordSerializer::read()` uses
+     * for the read side.
+     *
      * @param  list<string>  $paths
      * @return array<string, mixed>
      */
@@ -328,6 +345,15 @@ final class RecordForm
             }
 
             $attribute = explode('.', $path, 2)[0];
+
+            if (method_exists($record, 'getTranslations')
+                && method_exists($record, 'getTranslatableAttributes')
+                && in_array($attribute, $record->getTranslatableAttributes(), true)) {
+                $stored = [...$stored, ...self::leafPaths([$attribute => $record->getTranslations($attribute)])];
+
+                continue;
+            }
+
             $value = $record->getAttribute($attribute);
 
             if (is_array($value)) {
@@ -400,8 +426,32 @@ final class RecordForm
             self::schema($class, $state, $operation, $record),
         )->getComponents();
 
+        // Every media component's plan, collected but NOT applied inside the
+        // loop below — see the comment at the loop's media branch for why:
+        // a request naming two media fields must reconcile either both or
+        // neither.
+        $mediaPlans = [];
+
+        // Same reasoning, for tags: every classified-clean Spatie component,
+        // synced only after the whole loop finishes validating all of them.
+        // See the loop's tags branch.
+        $tagComponents = [];
+
         foreach (RuleExtractor::relationWriteComponents($components) as $name => $component) {
             if (! Arr::has($payload, $name)) {
+                // Final review finding 2: relation-write names carry no
+                // Laravel rule (RuleExtractor withholds one — the same
+                // reason tagsRequired()/MediaReconciler::isRequired() exist
+                // at all), so this `continue` was the ONLY place a
+                // `->required()` tags/media field left off the payload
+                // entirely could still refuse — web's own CreateRecord does,
+                // making mobile looser. CREATE only: an update that never
+                // mentions the field is "leave it alone", never "clear it",
+                // per this method's own docblock.
+                if ($operation === 'create') {
+                    self::assertNotRequiredOnAbsentCreate($component, $name, $record);
+                }
+
                 continue;
             }
 
@@ -419,7 +469,184 @@ final class RecordForm
                 continue;
             }
 
+            // A Spatie tags field saves through Filament's OWN
+            // saveRelationshipsUsing() closure — syncTagsWithType(), the P9
+            // relationship-repeater precedent, not new machinery — unlike
+            // media, which needs its own reconciler because no Eloquent
+            // relation exists to hand that closure.
+            //
+            // The two-gate check below is fail-CLOSED and load-bearing, not
+            // belt-and-braces: RuleExtractor::relationWriteComponents() walks
+            // this same $components tree independently of SchemaWalker, so a
+            // Spatie field the walker DROPPED for one of these exact two
+            // reasons (a traitless model; an unresolvable ->type()) still
+            // reaches this loop on a crafted request naming it — the walker
+            // never publishing the field is not itself a write-path guard.
+            if (TagFields::isSpatieTags($component)) {
+                if (! method_exists($record, 'syncTagsWithType') || TagFields::typeOf($component) === null) {
+                    continue;
+                }
+
+                $value = Arr::get($payload, $name);
+
+                // A crafted non-string element would otherwise reach
+                // Filament's own findOrCreate() and 500; refused here as a
+                // field-keyed 422 before anything syncs.
+                if (! is_array($value) || ! array_is_list($value)) {
+                    throw ValidationException::withMessages([$name => 'This field expects a list of tag names.']);
+                }
+
+                foreach ($value as $tag) {
+                    // `trim($tag) === ''` catches a whitespace-only element
+                    // (" ", "\t") the bare `=== ''` check let through — final
+                    // review triage: it would otherwise reach Filament's own
+                    // findOrCreate() and mint a tag no one can tell apart
+                    // from "no tag at all" once trimmed for display.
+                    if (! is_string($tag) || trim($tag) === '') {
+                        throw ValidationException::withMessages([$name => 'This field contains an invalid tag.']);
+                    }
+                }
+
+                // Relation-write names carry no Laravel rule of their own
+                // (RuleExtractor withholds one), so `->required()` is
+                // enforced here or nowhere — same reasoning as
+                // MediaReconciler::isRequired(), fail closed on a throwing
+                // gate rather than silently letting an empty list through.
+                if ($value === [] && self::tagsRequired($component, $name)) {
+                    throw ValidationException::withMessages([$name => 'This field is required.']);
+                }
+
+                // Classified here, synced only after the whole loop finishes
+                // — the media plans' own reasoning: `{"tags": ["a"], "topics":
+                // ["x", 5]}` on a resource with both fields must not sync
+                // `tags` and THEN 422 on `topics`, leaving the write half
+                // applied. Every tags field validates clean before any of
+                // them calls saveRelationships().
+                $tagComponents[] = $component;
+
+                continue;
+            }
+
+            // A medialibrary upload persists through its own reconciler
+            // (P14), never through Filament's saveRelationships() — that
+            // machinery expects an Eloquent relation, and a media collection
+            // is not one.
+            //
+            // Classified here, applied only after the whole loop finishes:
+            // classify() only reads, so collecting every media field's plan
+            // before mutating any of them is what keeps a two-media-field
+            // request atomic across those fields — a payload naming both
+            // `photos` and `cover` must not reconcile `photos` and then 422
+            // on `cover`, leaving the write half-applied. Non-media
+            // components are unaffected and still save immediately below,
+            // in their existing per-component order — that ordering (and
+            // whatever it implies for a relation write ahead of a media one
+            // in the same request) is pre-existing package behaviour this
+            // task does not change.
+            if (MediaFields::isMediaUpload($component)) {
+                $collection = MediaFields::collectionOf($component);
+
+                if ($collection === null || ! method_exists($record, 'getMedia')) {
+                    // Fail closed — the walker published readOnly for both
+                    // shapes (a throwing collection gate, and a model with no
+                    // medialibrary trait), so the write path refuses the same
+                    // pair rather than guess.
+                    continue;
+                }
+
+                $mediaPlans[] = MediaReconciler::classify(
+                    $record,
+                    $name,
+                    $component,
+                    $collection,
+                    Arr::get($payload, $name),
+                );
+
+                continue;
+            }
+
             $component->saveRelationships();
+        }
+
+        // Every media field classified without throwing on its OWN tokens —
+        // but two fields naming the SAME fresh path both classify cleanly in
+        // isolation (nothing has moved the file yet), so a cross-field claim
+        // is checked here, still before anything applies. See
+        // MediaReconciler::assertNoCrossFieldClaims().
+        MediaReconciler::assertNoCrossFieldClaims($mediaPlans);
+
+        // Only now, with every plan classified AND no path double-claimed,
+        // apply them all.
+        foreach ($mediaPlans as $plan) {
+            MediaReconciler::apply($plan);
+        }
+
+        // Every tags field validated clean above — now sync all of them.
+        // `unsetRelation('tags')` once, not per field: every Spatie tags
+        // field on a model shares the SAME underlying `tags` relation
+        // (scoped by type at read time), so one clear after the last sync
+        // is enough, and unconditional either way — the v5 closure already
+        // does this itself, but v4 does not, and the write response's
+        // serializer must never read a stale collection.
+        foreach ($tagComponents as $component) {
+            $component->saveRelationships();
+        }
+
+        if ($tagComponents !== []) {
+            $record->unsetRelation('tags');
+        }
+    }
+
+    /**
+     * The create-only absence check finding 2 of the P15 final review calls
+     * for, applied identically to a Spatie tags field and a media upload:
+     * both repeat the SAME fail-closed gate the main loop applies once a
+     * value IS present (traitless model; an unresolvable type/collection
+     * gate) before asking `->required()` at all — a field the walker already
+     * dropped publishes nothing for a client to submit in the first place,
+     * so treating its permanent absence as a violation would 422 every
+     * create forever. Only a field that is genuinely live and declares
+     * `->required()` refuses.
+     */
+    private static function assertNotRequiredOnAbsentCreate(object $component, string $name, Model $record): void
+    {
+        if (TagFields::isSpatieTags($component)) {
+            if (method_exists($record, 'syncTagsWithType')
+                && TagFields::typeOf($component) !== null
+                && self::tagsRequired($component, $name)) {
+                throw ValidationException::withMessages([$name => 'This field is required.']);
+            }
+
+            return;
+        }
+
+        if (MediaFields::isMediaUpload($component)) {
+            $collection = MediaFields::collectionOf($component);
+
+            if ($collection !== null
+                && method_exists($record, 'getMedia')
+                && MediaReconciler::isRequired($component, $name)) {
+                throw ValidationException::withMessages([$name => 'This field is required.']);
+            }
+        }
+    }
+
+    /**
+     * `isRequired()`, fail-closed like `MediaReconciler::isRequired()`: a
+     * throwing gate refuses the write rather than guessing the field is
+     * optional, which would let mobile clear a `->required()` field the web
+     * panel forbids emptying.
+     */
+    private static function tagsRequired(object $component, string $field): bool
+    {
+        if (! method_exists($component, 'isRequired')) {
+            return false;
+        }
+
+        try {
+            return (bool) $component->isRequired();
+        } catch (Throwable) {
+            throw ValidationException::withMessages([$field => 'This field cannot accept a value right now.']);
         }
     }
 

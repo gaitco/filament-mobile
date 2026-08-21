@@ -39,8 +39,9 @@ use Throwable;
  *
  * The wire shape is unaffected in both directions: the client sends and
  * receives a `List<String>` whether a separator is configured or not, and never
- * sees or constructs the delimited form. The two halves below are the whole of
- * that guarantee.
+ * sees or constructs the delimited form. The write half is below; the read
+ * half is Core\RecordSerializer::hydrateTagStrings(), which is that guarantee's
+ * other side.
  */
 final class TagSeparators
 {
@@ -80,47 +81,6 @@ final class TagSeparators
         }
 
         return $attributes;
-    }
-
-    /**
-     * The read half — Filament's `hydrateTags()`, applied to a serialized
-     * record before it goes out.
-     *
-     * Without it the delimited column would reach the client verbatim and a
-     * separator-configured field would be the one place the wire value is a
-     * string, breaking the `List<String>` contract every other tags field
-     * keeps. The client is deliberately not taught to split: one shape on the
-     * wire is the whole point of joining server-side.
-     *
-     * Takes the resolved MAP rather than components, because its caller is
-     * RecordSerializer — which serves four seams (`index()`, `show()`, and the
-     * `store()`/`update()` response bodies) off one resource and must resolve
-     * the map once, not once per record. See forResource().
-     *
-     * @param  array<string, mixed>  $payload
-     * @param  array<string, string>  $separators  `name => separator`
-     * @return array<string, mixed>
-     */
-    public static function hydrate(array $payload, array $separators): array
-    {
-        foreach ($separators as $name => $separator) {
-            if (! array_key_exists($name, $payload) || is_array($payload[$name])) {
-                continue;
-            }
-
-            $value = $payload[$name];
-
-            // `hydrateTags()`'s own collapse, `blank()` included rather than a
-            // bare `=== ''`: `explode()` on an empty string yields `['']`, and
-            // a column holding whitespace is `blank()` to Filament, so its own
-            // form shows `[]` where a stricter test would publish `["   "]`.
-            // The point of a mirror is that the two agree on the edges too.
-            $tags = explode($separator, is_string($value) ? $value : '');
-
-            $payload[$name] = (count($tags) === 1 && blank($tags[0])) ? [] : $tags;
-        }
-
-        return $payload;
     }
 
     /**
@@ -198,6 +158,19 @@ final class TagSeparators
             }
 
             if ($type !== 'tags') {
+                continue;
+            }
+
+            // P15, load-bearing: a Spatie tags field maps to this same
+            // `tags` type (ComponentTypeMap), but it has no COLUMN of its
+            // own — Filament's own `saveRelationshipsUsing` closure writes
+            // it (TagFields::isSpatieTags(), FieldPersistence::
+            // savesViaRelationship()), never a `dehydrateStateUsing`
+            // implode. Mirroring its separator here would `implode()` the
+            // submitted list into a column that does not exist on the
+            // model, on the very next write. Skipped unconditionally,
+            // whatever `getSeparator()` answers.
+            if (TagFields::isSpatieTags($component)) {
                 continue;
             }
 

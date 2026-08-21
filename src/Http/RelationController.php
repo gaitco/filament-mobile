@@ -5,16 +5,23 @@ declare(strict_types=1);
 namespace Gait\FilamentMobile\Http;
 
 use Filament\Facades\Filament;
-use Gait\FilamentMobile\Authorizer;
 use Gait\FilamentMobile\Introspection\FormDefaults;
+use Gait\FilamentMobile\Introspection\MediaFields;
 use Gait\FilamentMobile\Introspection\RelationDiscovery;
+use Gait\FilamentMobile\Introspection\RichContentAdapter;
+use Gait\FilamentMobile\Introspection\TagFields;
+use Gait\FilamentMobile\Introspection\TagSeparatorAdapter;
 use Gait\FilamentMobile\Introspection\TagSeparators;
+use Gait\FilamentMobile\MobileCard;
 use Gait\FilamentMobile\MobileResource;
-use Gait\FilamentMobile\RecordSerializer;
+use Gait\FilamentMobile\PanelSchemaBuilder;
 use Gait\FilamentMobile\ResourceRegistry;
 use Gait\FilamentMobile\Write\RecordForm;
-use Gait\FilamentMobile\Write\SettledSchema;
 use Gait\FilamentMobile\Write\WritableNames;
+use Gait\MobileCore\Authorizer;
+use Gait\MobileCore\ListQuery;
+use Gait\MobileCore\RecordSerializer;
+use Gait\MobileCore\SettledSchema;
 use Illuminate\Contracts\Auth\Authenticatable;
 use Illuminate\Contracts\Auth\Guard;
 use Illuminate\Database\Eloquent\Model;
@@ -39,8 +46,10 @@ use Throwable;
  */
 final class RelationController
 {
-    public function __construct(private readonly ResourceRegistry $registry)
-    {
+    public function __construct(
+        private readonly ResourceRegistry $registry,
+        private readonly PanelSchemaBuilder $builder,
+    ) {
     }
 
     public function __invoke(Request $request, string $resource, string $id, string $relation): JsonResponse
@@ -62,6 +71,16 @@ final class RelationController
         // omits a relation entirely, so the endpoint for one was never
         // published either and the 404 above has already fired.
         $card = $published['card'];
+
+        // Same reasoning as index()'s own mediaPaths computation: an undotted
+        // media path (e.g. a card-bound `cover`) never appears in
+        // `relationPaths()`, so without an explicit `media` eager load it
+        // lazy-loads once per row here too.
+        $cardMediaPaths = $this->cardMediaPaths($published['resource'], $card);
+
+        // Same reasoning, for the tags read-path twin of the media N+1
+        // defence above.
+        $cardTagPaths = $this->cardTagPaths($published['resource'], $card);
 
         // P11: the index's search/sort, against THIS relation's declarations
         // and strictly after the last gate — a 422 for a bad parameter must
@@ -85,8 +104,15 @@ final class RelationController
         // the page instead of one per row. `index()` has had this since P1 and
         // this endpoint — documented as mirroring it "exactly" — did not:
         // measured at 14 queries for 10 rows against index()'s 4.
+        // Same reasoning as MobilePanelController::index()'s own guard:
+        // cardMediaPaths()/cardTagPaths() are schema-only and survive on a
+        // model without HasMedia/HasTags, so the eager load itself needs the
+        // trait check — `$related` is already the child model instance this
+        // relation resolved, from the same reach `resolve()` uses.
         $records = $relationship
             ->with($card->relationPaths())
+            ->when($cardMediaPaths !== [] && method_exists($related, 'getMedia'), fn ($query) => $query->with('media'))
+            ->when($cardTagPaths !== [] && method_exists($related, 'syncTagsWithType'), fn ($query) => $query->with('tags'))
             ->paginate(config('filament-mobile.per_page'));
 
         // The child's OWN resource, not this one: a column's shape is declared
@@ -104,11 +130,14 @@ final class RelationController
         // when no mobile resource serves the child model or when several do,
         // and null is the pre-existing behaviour (the raw stored value). See
         // ResourceRegistry::findByModel().
-        $serializer = new RecordSerializer(
+        $serializer = (new RecordSerializer(
             $card,
             $related->getRouteKeyName(),
             $published['resource'],
-        );
+            new RichContentAdapter(),
+            new TagSeparatorAdapter(),
+        ))->withMediaPaths($cardMediaPaths)
+            ->withTagPaths($cardTagPaths);
 
         return response()->json([
             'data' => array_map(
@@ -385,11 +414,63 @@ final class RelationController
      */
     private function rowSerializer(array $published, Model $related): RecordSerializer
     {
-        return new RecordSerializer(
+        return (new RecordSerializer(
             $published['card'],
             $related->getRouteKeyName(),
             $published['resource'],
-        );
+            new RichContentAdapter(),
+            new TagSeparatorAdapter(),
+        ))->withMediaPaths($this->cardMediaPaths($published['resource'], $published['card']))
+            ->withTagPaths($this->cardTagPaths($published['resource'], $published['card']));
+    }
+
+    /**
+     * The child resource's own media paths, intersected with the relation's
+     * published CARD — the same card-only whitelist `index()`'s
+     * `cardMediaPaths()` enforces, for the same reason: a relation row is a
+     * card row, never a detail screen, so a media field the card does not
+     * show must not grow a `.__media` sibling here either.
+     *
+     * `$class` is nullable because the read endpoint's `$published['resource']`
+     * is null whenever the child model resolves to zero or several mobile
+     * resources (see `resolve()`) — a relation with no single child resource
+     * publishes no media metadata, same as it publishes no write capability.
+     *
+     * @param  class-string|null  $class
+     * @return array<string, array{collection: string, multiple: bool}>
+     */
+    private function cardMediaPaths(?string $class, MobileCard $card): array
+    {
+        if ($class === null) {
+            return [];
+        }
+
+        $paths = [
+            ...MediaFields::pathsIn($this->builder->schemaComponents($class, 'infolist')),
+            ...MediaFields::pathsIn($this->builder->schemaComponents($class, 'form')),
+        ];
+
+        return array_intersect_key($paths, array_flip($card->fieldPaths()));
+    }
+
+    /**
+     * The child resource's own tags paths, intersected with the relation's
+     * published CARD — the tags read-path twin of `cardMediaPaths()` above,
+     * for the same reason. Form-only: there is no infolist tags entry (see
+     * `MobilePanelController::formProjection()`'s docblock).
+     *
+     * @param  class-string|null  $class
+     * @return array<string, array{any: bool, type: ?string}>
+     */
+    private function cardTagPaths(?string $class, MobileCard $card): array
+    {
+        if ($class === null) {
+            return [];
+        }
+
+        $paths = TagFields::pathsIn($this->builder->schemaComponents($class, 'form'));
+
+        return array_intersect_key($paths, array_flip($card->fieldPaths()));
     }
 
     /**

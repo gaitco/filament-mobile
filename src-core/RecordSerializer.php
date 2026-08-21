@@ -2,11 +2,12 @@
 
 declare(strict_types=1);
 
-namespace Gait\FilamentMobile;
+namespace Gait\MobileCore;
 
-use Gait\FilamentMobile\Introspection\RichContent;
-use Gait\FilamentMobile\Introspection\TagSeparators;
+use Gait\MobileCore\Ports\RichTextEnvelopes;
+use Gait\MobileCore\Ports\TagSeparatorSource;
 use Illuminate\Database\Eloquent\Model;
+use Throwable;
 use Illuminate\Support\Arr;
 
 /**
@@ -30,6 +31,24 @@ final class RecordSerializer
 
     /** @var list<string> */
     private array $richPaths = [];
+
+    /**
+     * Path => collection/multiplicity for every Spatie media field the
+     * record's form and/or infolist declare — `MediaFields::pathsIn()`'s
+     * shape (Task 2's projection plumbing).
+     *
+     * @var array<string, array{collection: string, multiple: bool}>
+     */
+    private array $mediaPaths = [];
+
+    /**
+     * Path => any/type metadata for every Spatie tags field the record's form
+     * declares — `TagFields::pathsIn()`'s shape (Task 3's read-path twin of
+     * `$mediaPaths` above).
+     *
+     * @var array<string, array{any: bool, type: ?string}>
+     */
+    private array $tagPaths = [];
 
     /**
      * Resolved once per instance, on first use — `index()` serialises a whole
@@ -80,7 +99,9 @@ final class RecordSerializer
     public function __construct(
         private readonly MobileCard $card,
         private readonly string $recordKey,
-        private readonly ?string $resourceClass = null,
+        private readonly ?string $resourceClass,
+        private readonly RichTextEnvelopes $richText,
+        private readonly TagSeparatorSource $tagSeparatorSource,
     ) {
     }
 
@@ -167,6 +188,41 @@ final class RecordSerializer
         return $clone;
     }
 
+    /**
+     * Every Spatie media field on this record: a path this is called with
+     * gets a raw uuid value (honouring its declared single/multiple shape)
+     * plus a `"$path.__media"` sibling of full item metadata — url, thumbUrl,
+     * name, size, mime. Not merged with `richPaths` even though both add a
+     * flat sibling key, because a media path also OVERWRITES the raw value
+     * (attribute-style paths never do that): see the terminal pass in
+     * `serialize()`.
+     *
+     * @param  array<string, array{collection: string, multiple: bool}>  $paths
+     */
+    public function withMediaPaths(array $paths): self
+    {
+        $clone = clone $this;
+        $clone->mediaPaths = $paths;
+
+        return $clone;
+    }
+
+    /**
+     * Every Spatie tags field on this record: a path this is called with
+     * gets a flat `List<String>` of the attached tag names — `[]` when the
+     * record carries none. Gated on `method_exists($record, 'tagsWithType')`,
+     * the `HasTags` tell, the same way the media pass gates on `getMedia`.
+     *
+     * @param  array<string, array{any: bool, type: ?string}>  $paths
+     */
+    public function withTagPaths(array $paths): self
+    {
+        $clone = clone $this;
+        $clone->tagPaths = $paths;
+
+        return $clone;
+    }
+
     /** @return array<string, mixed> */
     public function serialize(Model $record): array
     {
@@ -182,6 +238,33 @@ final class RecordSerializer
             // writes {"company":{"name":…}}. A null anywhere along the path
             // yields null — a missing relation is never a failure.
             data_set($payload, $path, $this->read($record, $path));
+        }
+
+        // A dotted path's related MODEL also contributes its own route key
+        // ('category.id'), so an entry published with a `target` (see
+        // SchemaWalker::entryTarget()) has an id to navigate with. Guarded
+        // per relation: a json column's nested map is not a Model and adds
+        // nothing; a throwing accessor costs the id, never the record.
+        foreach ($paths as $path) {
+            if (! str_contains($path, '.')) {
+                continue;
+            }
+
+            $relation = strtok($path, '.');
+
+            try {
+                $related = $record->{$relation};
+            } catch (Throwable) {
+                continue;
+            }
+
+            if ($related instanceof Model) {
+                data_set(
+                    $payload,
+                    $relation.'.'.$related->getRouteKeyName(),
+                    $related->getRouteKey(),
+                );
+            }
         }
 
         // AFTER the nesting pass, and written flat: a form path that shares its
@@ -244,6 +327,62 @@ final class RecordSerializer
             $payload["{$path}.__rich"] = $envelope;
         }
 
+        // AFTER the rich pass, for the same "flat sibling" reason, but this
+        // one also OVERWRITES the raw value the nesting pass wrote — a media
+        // collection is not an attribute, so there is nothing in the payload
+        // to derive from, and `$path` is read OFF THE RECORD like the
+        // repeater rows are. Gated on the model actually having medialibrary
+        // (method_exists, the HasTranslations precedent above): a media path
+        // declared against a model without it publishes neither value nor
+        // sibling, leaving whatever the earlier passes already wrote.
+        foreach ($this->mediaPaths as $path => $meta) {
+            if (! method_exists($record, 'getMedia')) {
+                continue;
+            }
+
+            $items = [];
+
+            foreach ($record->getMedia($meta['collection']) as $media) {
+                $items[] = [
+                    'uuid' => $media->uuid,
+                    'url' => $media->getUrl(),
+                    'thumbUrl' => $media->hasGeneratedConversion('thumb') ? $media->getUrl('thumb') : null,
+                    'name' => $media->file_name,
+                    'size' => $media->size,
+                    'mime' => $media->mime_type,
+                ];
+            }
+
+            // Raw value: uuid tokens, honouring the field's single/multiple
+            // shape — multiplicity travels with the path map
+            // (`MediaFields::pathsIn()`'s shape), never re-derived here.
+            $uuids = array_column($items, 'uuid');
+            $payload[$path] = $meta['multiple'] ? $uuids : ($uuids[0] ?? null);
+            $payload["{$path}.__media"] = $items;
+        }
+
+        // Beside the media pass, for the same reason: a tags path is not an
+        // attribute either, so there is nothing in the payload to derive
+        // from, and it is read OFF THE RECORD. Gated on `tagsWithType`
+        // (`HasTags`'s own method, present alongside the plain `tags`
+        // relation it also declares) — a tags path against a model without
+        // the trait publishes nothing, leaving whatever the earlier passes
+        // already wrote.
+        foreach ($this->tagPaths as $path => $meta) {
+            if (! method_exists($record, 'tagsWithType')) {
+                continue;
+            }
+
+            // Off the loaded MODEL collection, never a query pluck: a tag's
+            // `name` is a translatable locale map, and only the model
+            // accessor (`Tag::getNameAttribute()`) unwraps the current
+            // locale from it. `DB::table('spatie_tags')->pluck('name')`
+            // would hand back the raw JSON map instead of a string.
+            $tags = $meta['any'] ? $record->tags : $record->tagsWithType($meta['type']);
+
+            $payload[$path] = $tags->pluck('name')->all();
+        }
+
         // LAST, and here rather than in a controller, for the reason the
         // `__rich` sibling above is produced here: every endpoint serialises
         // through this class, so this is the only place `index()` and `show()`
@@ -254,7 +393,7 @@ final class RecordSerializer
         // seam that publishes the column splits it. It was wired at show()
         // alone in the first cut of P7 Task 3, and a card listing such a field
         // published `"a,b"` from index() and `["a","b"]` from show().
-        return TagSeparators::hydrate($payload, $this->tagSeparators());
+        return $this->hydrateTagStrings($payload, $this->tagSeparators());
     }
 
     /** @return array<string, string> */
@@ -262,7 +401,7 @@ final class RecordSerializer
     {
         return $this->tagSeparators ??= $this->resourceClass === null
             ? []
-            : TagSeparators::forResource($this->resourceClass);
+            : $this->tagSeparatorSource->forResource($this->resourceClass);
     }
 
     /**
@@ -276,7 +415,7 @@ final class RecordSerializer
     private function richEnvelope(string $raw): ?array
     {
         if (! array_key_exists($raw, $this->richEnvelopes)) {
-            $this->richEnvelopes[$raw] = RichContent::envelopeFor($raw);
+            $this->richEnvelopes[$raw] = $this->richText->envelopeFor($raw);
         }
 
         return $this->richEnvelopes[$raw];
@@ -299,7 +438,7 @@ final class RecordSerializer
     private function richPathsFor(Model $record): array
     {
         return array_values(array_unique([
-            ...RichContent::attributesFor($record::class),
+            ...$this->richText->attributesFor($record::class),
             ...$this->richPaths,
         ]));
     }
@@ -333,5 +472,39 @@ final class RecordSerializer
         }
 
         return data_get($record->getTranslations($attribute), $rest);
+    }
+
+    /**
+     * Splits every separator-configured tag STRING into the contract's
+     * List<String> — the read half of the mirror whose write half is
+     * Introspection\TagSeparators::dehydrate(). Takes the resolved MAP rather
+     * than components, because this class serves four seams (`index()`,
+     * `show()`, and the `store()`/`update()` response bodies) off one
+     * resource and must resolve the map once, not once per record.
+     *
+     * @param  array<string, mixed>  $payload
+     * @param  array<string, string>  $separators  `name => separator`
+     * @return array<string, mixed>
+     */
+    private function hydrateTagStrings(array $payload, array $separators): array
+    {
+        foreach ($separators as $name => $separator) {
+            if (! array_key_exists($name, $payload) || is_array($payload[$name])) {
+                continue;
+            }
+
+            $value = $payload[$name];
+
+            // `hydrateTags()`'s own collapse, `blank()` included rather than a
+            // bare `=== ''`: `explode()` on an empty string yields `['']`, and
+            // a column holding whitespace is `blank()` to Filament, so its own
+            // form shows `[]` where a stricter test would publish `["   "]`.
+            // The point of a mirror is that the two agree on the edges too.
+            $tags = explode($separator, is_string($value) ? $value : '');
+
+            $payload[$name] = (count($tags) === 1 && blank($tags[0])) ? [] : $tags;
+        }
+
+        return $payload;
     }
 }

@@ -290,3 +290,20 @@ it('leaves a dotted CARD path nested, so cards keep working', function () {
 
     expect($data['company'] ?? null)->toBeArray();
 });
+
+it('serialises the related record\'s route key beside a dotted path, so an entry target has an id to navigate with', function () {
+    config()->set('filament-mobile.resources', [
+        \Gait\FilamentMobile\Tests\Fixtures\Resources\LinkedEntryBannerResource::class,
+        \Gait\FilamentMobile\Tests\Fixtures\Resources\CompanyResource::class,
+    ]);
+
+    $banner = seedBanner();
+
+    $data = $this->actingAs(makeUser('admin'))
+        ->getJson("/api/mobile-panel/linked-banners/{$banner->id}")
+        ->assertOk()
+        ->json('data');
+
+    expect($data['company']['name'])->toBe('Acme')
+        ->and($data['company']['id'])->toBe($banner->company_id);
+});

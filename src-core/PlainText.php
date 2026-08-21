@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Gait\FilamentMobile\Introspection;
+namespace Gait\MobileCore;
 
 /**
  * Flattens markup to the string a sighted web user reads. Two callers need

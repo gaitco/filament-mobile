@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Gait\FilamentMobile\Http;
+namespace Gait\MobileCore;
 
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\Request;

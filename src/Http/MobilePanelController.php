@@ -10,21 +10,27 @@ use Filament\Schemas\Schema;
 use Filament\Support\Exceptions\Cancel;
 use Filament\Support\Exceptions\Halt;
 use Gait\FilamentMobile\Actions\ActionResolver;
-use Gait\FilamentMobile\Authorizer;
 use Gait\FilamentMobile\Introspection\ChildComponents;
 use Gait\FilamentMobile\Introspection\ComponentTypeMap;
 use Gait\FilamentMobile\Introspection\FieldPersistence;
 use Gait\FilamentMobile\Introspection\FormDefaults;
+use Gait\FilamentMobile\Introspection\MediaFields;
 use Gait\FilamentMobile\Introspection\RichContent;
+use Gait\FilamentMobile\Introspection\RichContentAdapter;
 use Gait\FilamentMobile\Introspection\SchemaWalker;
+use Gait\FilamentMobile\Introspection\TagFields;
+use Gait\FilamentMobile\Introspection\TagSeparatorAdapter;
 use Gait\FilamentMobile\Introspection\TagSeparators;
-use Gait\FilamentMobile\Introspection\WalkWarnings;
+use Gait\FilamentMobile\MobileCard;
 use Gait\FilamentMobile\PanelSchemaBuilder;
-use Gait\FilamentMobile\RecordSerializer;
 use Gait\FilamentMobile\ResourceRegistry;
 use Gait\FilamentMobile\Write\RecordForm;
-use Gait\FilamentMobile\Write\SettledSchema;
 use Gait\FilamentMobile\Write\WritableNames;
+use Gait\MobileCore\Authorizer;
+use Gait\MobileCore\ListQuery;
+use Gait\MobileCore\RecordSerializer;
+use Gait\MobileCore\SettledSchema;
+use Gait\MobileCore\WalkWarnings;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -144,6 +150,19 @@ final class MobilePanelController
 
         $card = $mobile->getCard();
 
+        // Computed before the query so its emptiness can gate the eager load
+        // right below — an undotted media path (e.g. a `leadingImage('cover')`
+        // slot) never appears in `relationPaths()`, which only derives from
+        // DOTTED card fields, so without this a card-bound `cover` lazy-loads
+        // `media` once per row: 20 rows, 20 extra queries.
+        $cardMediaPaths = $this->cardMediaPaths($class, $card);
+
+        // Same reasoning as $cardMediaPaths, and the same eager-load gap it
+        // closes: a card-bound tags field (e.g. a `subtitle('tags')`) is
+        // read off the model's `tags`/`tagsWithType()` relation, which
+        // lazy-loads once per row without an explicit eager load.
+        $cardTagPaths = $this->cardTagPaths($class, $card);
+
         // The resource's own query, never the model's: global scopes, soft
         // deletes and tenancy are inherited rather than reimplemented here.
         $query = $class::getEloquentQuery()
@@ -151,12 +170,35 @@ final class MobilePanelController
             // no declaration and cannot drift from what is serialised.
             ->with($card->relationPaths());
 
+        // `cardMediaPaths()`/`cardTagPaths()` are schema-only (no model
+        // check — see their docblocks), so a card-bound path survives on a
+        // model that never registered HasMedia/HasTags. Eager-loading a
+        // relation the model does not declare is a RelationNotFoundException,
+        // not a graceful empty read — RecordSerializer's own `method_exists`
+        // gate only protects the READ, not this eager load, so the trait
+        // check has to happen here too.
+        if ($cardMediaPaths !== [] && method_exists($class::getModel(), 'getMedia')) {
+            $query->with('media');
+        }
+
+        if ($cardTagPaths !== [] && method_exists($class::getModel(), 'syncTagsWithType')) {
+            $query->with('tags');
+        }
+
         ListQuery::applySearch($query, ListQuery::stringQuery($request, 'search'), $mobile->getSearchable());
         ListQuery::applySort($query, $request, $mobile->getSorts(), $mobile->getDefaultSortKey(), $mobile->getDefaultSortDirection());
 
         $records = $query->paginate(config('filament-mobile.per_page'));
 
-        $serializer = new RecordSerializer($card, (new ($class::getModel())())->getRouteKeyName(), $class);
+        $serializer = (new RecordSerializer(
+            $card,
+            (new ($class::getModel())())->getRouteKeyName(),
+            $class,
+            new RichContentAdapter(),
+            new TagSeparatorAdapter(),
+        ))
+            ->withMediaPaths($cardMediaPaths)
+            ->withTagPaths($cardTagPaths);
 
         return response()->json([
             'data' => array_map(
@@ -251,7 +293,15 @@ final class MobilePanelController
 
         RecordForm::saveRelations($class, $settled->state(), $record, 'create', $request->all());
 
-        $serializer = new RecordSerializer($mobile->getCard(), $record->getRouteKeyName(), $class);
+        $serializer = (new RecordSerializer(
+            $mobile->getCard(),
+            $record->getRouteKeyName(),
+            $class,
+            new RichContentAdapter(),
+            new TagSeparatorAdapter(),
+        ))
+            ->withMediaPaths($this->mediaPathsFor($class))
+            ->withTagPaths($this->tagPathsFor($class));
 
         return response()->json(['data' => $serializer->serialize($record)], 201);
     }
@@ -310,21 +360,38 @@ final class MobilePanelController
         // RecordSerializer::richPathsFor(), which is where the union lives).
         // A `->prose()` entry over a column the model declares nothing about
         // is covered only by this half.
-        $infolist = $this->infolistNodes($class, $resource, $attributes);
+        $infolist = $this->infolistNodes($class, $resource, $attributes, $infolistComponents);
 
         $form = $this->formProjection($class, $resource, $attributes, $record);
 
-        $serializer = (new RecordSerializer($mobile->getCard(), $model->getRouteKeyName(), $class))
+        // The form's own media uploads plus the infolist's read-only media
+        // entries (`SpatieMediaLibraryImageEntry`) — a card's leading image
+        // and a detail-screen image both name a path that may never appear
+        // in the form at all. The form's declaration wins on a name both
+        // sides use for the same field (GalleryResource's `cover` is both),
+        // which is moot in practice: the same collection reads the same way
+        // from either component.
+        $form['mediaPaths'] = [...MediaFields::pathsIn($infolistComponents), ...$form['mediaPaths']];
+
+        $serializer = (new RecordSerializer(
+            $mobile->getCard(),
+            $model->getRouteKeyName(),
+            $class,
+            new RichContentAdapter(),
+            new TagSeparatorAdapter(),
+        ))
             ->withInfolistPaths($this->leafNames($infolist))
             ->withFormPaths($form['paths'])
             ->withRepeaterRows($form['repeaterRows'])
-            ->withRichPaths(RichContent::entryNamesIn($infolist));
+            ->withRichPaths(RichContent::entryNamesIn($infolist))
+            ->withMediaPaths($form['mediaPaths'])
+            ->withTagPaths($form['tagPaths']);
 
         $resolver = new ActionResolver($class, $mobile);
 
         return response()->json([
-            // Not wrapped in TagSeparators::hydrate() here, deliberately: the
-            // read half lives inside RecordSerializer, so index() and the
+            // Not wrapped in a hydrate call here, deliberately: the read half
+            // lives inside RecordSerializer, so index() and the
             // write responses get it too. Wrapping one seam is how the first
             // cut of this shipped two shapes for one column.
             'data' => $serializer->serialize($record),
@@ -559,7 +626,15 @@ final class MobilePanelController
 
         RecordForm::saveRelations($class, $settled->state(), $record, 'edit', $request->all());
 
-        $serializer = new RecordSerializer($mobile->getCard(), $record->getRouteKeyName(), $class);
+        $serializer = (new RecordSerializer(
+            $mobile->getCard(),
+            $record->getRouteKeyName(),
+            $class,
+            new RichContentAdapter(),
+            new TagSeparatorAdapter(),
+        ))
+            ->withMediaPaths($this->mediaPathsFor($class))
+            ->withTagPaths($this->tagPathsFor($class));
 
         return response()->json(['data' => $serializer->serialize($record)]);
     }
@@ -629,13 +704,23 @@ final class MobilePanelController
      * null host fatals on the first one — silently, because the catch below
      * turns it into a fallback to the card's fields.
      *
+     * `$rawComponents` is an out-parameter carrying the raw (unwalked)
+     * component list back to the caller — `show()` needs it to fold this
+     * infolist's own media entries (`SpatieMediaLibraryImageEntry`) into the
+     * record's `mediaPaths` union alongside the form's, and a walked NODE
+     * carries no collection name (that is deliberately a server-side
+     * concern, never published — see MediaFields). Set to `[]` on the
+     * construction-time failure below, same as the return value.
+     *
      * @param  class-string  $class
      * @param  array<string, mixed>  $state
+     * @param  list<object>|null  $rawComponents
      * @return list<array<string, mixed>>
      */
-    private function infolistNodes(string $class, string $resourceKey, array $state): array
+    private function infolistNodes(string $class, string $resourceKey, array $state, ?array &$rawComponents = null): array
     {
         $walker = new SchemaWalker(new WalkWarnings());
+        $rawComponents = [];
 
         try {
             // `operation: 'view'`, and deliberately NO record, even though one
@@ -655,6 +740,8 @@ final class MobilePanelController
             // record — see RecordForm::components().
             $components = $class::infolist(RecordForm::schema($class, $state, 'view'))
                 ->getComponents();
+
+            $rawComponents = $components;
         } catch (Throwable $e) {
             // Same construction-time hazard /schema guards against: a closure
             // typed against the record fatals when getComponents() evaluates it
@@ -685,9 +772,21 @@ final class MobilePanelController
      * try/catch mirrors infolistPaths(): a throwing form costs the prefill,
      * not the whole detail screen.
      *
+     * `mediaPaths` is this FORM's half of the record's media union (Task 3's
+     * `RecordSerializer::withMediaPaths()`) — leaf name => collection +
+     * multiplicity for every Spatie upload the form declares. `show()` folds
+     * in the infolist's own media entries beside it, the same two-halves
+     * shape `RichContent::entryNamesIn()`/`attributesFor()` already follow
+     * for rich content.
+     *
+     * `tagPaths` is this FORM's half of the record's tags union — there is no
+     * infolist counterpart (the plugin has no read-only tags entry, unlike
+     * media's `SpatieMediaLibraryImageEntry`), so unlike `mediaPaths` this is
+     * never folded with an infolist half in show().
+     *
      * @param  class-string  $class
      * @param  array<string, mixed>  $state
-     * @return array{paths: list<string>, repeaterRows: array<string, list<array<string, mixed>>>}
+     * @return array{paths: list<string>, repeaterRows: array<string, list<array<string, mixed>>>, mediaPaths: array<string, array{collection: string, multiple: bool}>, tagPaths: array<string, array{any: bool, type: ?string}>}
      */
     private function formProjection(string $class, string $resourceKey, array $state, Model $record): array
     {
@@ -700,10 +799,16 @@ final class MobilePanelController
                 . class_basename($class) . ', the edit form will open unprefilled: '
                 . $e->getMessage());
 
-            return ['paths' => [], 'repeaterRows' => []];
+            return ['paths' => [], 'repeaterRows' => [], 'mediaPaths' => [], 'tagPaths' => []];
         }
 
-        $nodes = $walker->walk($components, class_basename($class), $resourceKey);
+        // $model matters here for the exact reason infolistPaths() passes it
+        // at :728: a Spatie tags field on a model without HasTags fails
+        // closed only when the walker can ask the model, and without it a
+        // traitless model's field survives in `paths` — which the generic
+        // form-field pass below then reads straight off the record, resolving
+        // whatever real relation the name happens to collide with.
+        $nodes = $walker->walk($components, class_basename($class), $resourceKey, $class::getModel());
 
         // A RELATIONSHIP repeater is the one repeater leafNames() must not
         // keep: it has no column of its own — its rows are child records the
@@ -740,7 +845,95 @@ final class MobilePanelController
                 $this->repeaterChildNames($nodes),
                 $record,
             ),
+            'mediaPaths' => MediaFields::pathsIn($components),
+            'tagPaths' => TagFields::pathsIn($components),
         ];
+    }
+
+    /**
+     * The resource's full media union — form uploads plus infolist entries —
+     * for a write response, which the client typically re-renders as the
+     * detail screen it just created or edited. A thinner set here would have
+     * the store/update response disagree with an immediate GET of the same
+     * record.
+     *
+     * Schema-only, like `cardMediaPaths()`: a media path's shape (collection
+     * name, multiplicity) is a fact about the SCHEMA, not this one record, so
+     * `PanelSchemaBuilder::schemaComponents()` answers it without the record-
+     * bound `infolistNodes()`/`formProjection()` walk — the walk's own return
+     * value went unused here, and `formProjection()`'s relationship-repeater
+     * half ran a real query per repeater to build rows nothing in this
+     * response reads. `store()`/`update()` never queried like that before
+     * this method existed, and nothing downstream needs the walked nodes —
+     * only the raw components `MediaFields::pathsIn()` reads.
+     *
+     * @param  class-string  $class
+     * @return array<string, array{collection: string, multiple: bool}>
+     */
+    private function mediaPathsFor(string $class): array
+    {
+        return [
+            ...MediaFields::pathsIn($this->builder->schemaComponents($class, 'infolist')),
+            ...MediaFields::pathsIn($this->builder->schemaComponents($class, 'form')),
+        ];
+    }
+
+    /**
+     * The resource's full tags union, for a write response — the same
+     * "schema-only" precedent `mediaPathsFor()` sets, and the reason it does:
+     * a write response typically becomes the detail screen the client just
+     * created or edited, and a thinner set here would have it disagree with
+     * an immediate GET of the same record.
+     *
+     * Form-only, unlike `mediaPathsFor()`: there is no infolist tags entry to
+     * fold in (see `formProjection()`'s docblock).
+     *
+     * @param  class-string  $class
+     * @return array<string, array{any: bool, type: ?string}>
+     */
+    private function tagPathsFor(string $class): array
+    {
+        return TagFields::pathsIn($this->builder->schemaComponents($class, 'form'));
+    }
+
+    /**
+     * The resource's OWN media paths, intersected with the CARD's whitelist —
+     * `index()`'s card-only serializer must not grow a `.__media` sibling for
+     * a field the list row never carries in the first place (`photos` on
+     * GalleryResource: a form-only upload, absent from the card).
+     *
+     * Built off the schema alone (`PanelSchemaBuilder::schemaComponents()`,
+     * the same record-less build `/schema` itself uses), because `index()`
+     * serialises a whole PAGE of records through one serializer — a media
+     * path's shape (collection name, multiplicity) is a fact about the
+     * schema, never about any one row.
+     *
+     * @param  class-string  $class
+     * @return array<string, array{collection: string, multiple: bool}>
+     */
+    private function cardMediaPaths(string $class, MobileCard $card): array
+    {
+        $paths = [
+            ...MediaFields::pathsIn($this->builder->schemaComponents($class, 'infolist')),
+            ...MediaFields::pathsIn($this->builder->schemaComponents($class, 'form')),
+        ];
+
+        return array_intersect_key($paths, array_flip($card->fieldPaths()));
+    }
+
+    /**
+     * The resource's OWN tags paths, intersected with the CARD's whitelist —
+     * the same reasoning `cardMediaPaths()` gives, and form-only for the same
+     * reason `tagPathsFor()` is: there is no infolist tags entry.
+     *
+     * @param  class-string  $class
+     * @return array<string, array{any: bool, type: ?string}>
+     */
+    private function cardTagPaths(string $class, MobileCard $card): array
+    {
+        $paths = TagFields::pathsIn($this->builder->schemaComponents($class, 'form'));
+
+        return array_intersect_key($paths, array_flip($card->fieldPaths()));
     }
 
     /**

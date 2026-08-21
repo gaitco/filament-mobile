@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 use Filament\Forms\Components\ColorPicker;
 use Gait\FilamentMobile\Introspection\SchemaWalker;
-use Gait\FilamentMobile\Introspection\WalkWarnings;
+use Gait\MobileCore\WalkWarnings;
 
 /**
  * Task 3 of P8. `ColorPicker` exposes exactly one accessor, `getFormat()`

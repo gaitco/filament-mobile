@@ -5,7 +5,12 @@ declare(strict_types=1);
 namespace Gait\FilamentMobile\Introspection;
 
 use Error;
+use Gait\FilamentMobile\ResourceRegistry;
 use Gait\FilamentMobile\Validation\RuleExtractor;
+use Gait\MobileCore\PlainText;
+use Gait\MobileCore\SafeEvaluator;
+use Gait\MobileCore\WalkWarnings;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use stdClass;
 use Throwable;
 
@@ -143,6 +148,10 @@ final class SchemaWalker
                     'unsupported component type ' . $component::class,
                 );
 
+                continue;
+            }
+
+            if ($type === 'tags' && TagFields::isSpatieTags($component) && $this->tagsFailClosed($component, $resource, $model)) {
                 continue;
             }
 
@@ -302,6 +311,27 @@ final class SchemaWalker
             $node['placeholder'] = $placeholder;
         }
 
+        // P17: `translatable: true` on a dotted leaf whose head segment is
+        // one of the MODEL's OWN translatable attributes — never guessed
+        // from the dotted name alone. A `category.name` BelongsTo path is
+        // dotted too and carries no translation; only
+        // `getTranslatableAttributes()` (behind the same `method_exists`
+        // pair `RecordForm::storedPaths()` gates on, never a
+        // `spatie/laravel-translatable` import here) says which dotted head
+        // is real. The client derives `{attribute, locale}` by splitting the
+        // published `name` at its LAST dot, so this key publishes only the
+        // one fact the name does not already carry: whether that split means
+        // anything. Only-when-true, the `writable`/`placeholder` precedent —
+        // never `false`, never on an undotted field, never on Banner's
+        // fake-cast `caption` fixture (a `cast => 'array'`, no trait, so the
+        // method_exists gate never opens): that absence is also what keeps
+        // `laravel-panel.json` byte-identical, since none of its fixtures
+        // carry the real trait.
+        if ($model !== null && $name !== null && str_contains($name, '.')
+            && in_array(explode('.', $name, 2)[0], $this->translatableAttributesOf($model), true)) {
+            $node['translatable'] = true;
+        }
+
         // Through SafeEvaluator like every other closure: a default reaching
         // for a Livewire request costs this one field's prefill and a
         // warning, never the request. Absent when the component declares
@@ -340,7 +370,25 @@ final class SchemaWalker
             }
         }
 
-        $config = $this->config($component, $node['type'], $resource, $name, $resourceKey, $insideRepeater);
+        $config = $this->config($component, $node['type'], $resource, $name, $resourceKey, $insideRepeater, $model);
+
+        // A dotted scalar entry ('category.name') whose first segment is a
+        // BelongsTo owned by exactly one opted-in resource gains a `target`:
+        // the phone can navigate to the related record the entry displays,
+        // reading its id off the path `record` names. Any ambiguity —
+        // several resources on the model, none, not a BelongsTo — publishes
+        // nothing: half a target is worse than none, same rule as a stat's
+        // resourceKey.
+        if (in_array($node['type'], ['text_entry', 'badge_entry', 'date_entry'], true)
+            && $name !== null
+            && str_contains($name, '.')
+        ) {
+            $target = $this->entryTarget($model, strtok($name, '.'));
+
+            if ($target !== null) {
+                $config['target'] = $target;
+            }
+        }
 
         if ($config !== []) {
             $node['config'] = $config;
@@ -466,6 +514,123 @@ final class SchemaWalker
     }
 
     /**
+     * Whether `$model` never registered `HasMedia` — detection by
+     * `method_exists`, never a `spatie/laravel-medialibrary` import (design
+     * spec's non-goals), the same `HasTranslations` precedent
+     * `RecordSerializer` already follows.
+     *
+     * A model that cannot even be constructed (a required constructor
+     * argument, an abstract base used as a fixture) fails closed the same
+     * way `RichContent::attributesFor()` does: "cannot tell" locks the
+     * field, it never admits it.
+     */
+    private function modelLacksMedia(string $model): bool
+    {
+        try {
+            return ! method_exists(new $model(), 'getMedia');
+        } catch (Throwable) {
+            return true;
+        }
+    }
+
+    /**
+     * P15: whether `$model` never registered `HasTags` — detection by
+     * `method_exists(..., 'syncTagsWithType')`, the exact method the
+     * plugin's own `saveRelationshipsUsing` closure calls, never a
+     * `spatie/laravel-tags` import. Same fail-closed shape as
+     * `modelLacksMedia()`: a model that cannot even be constructed locks
+     * the same way "cannot tell" does everywhere else in this file.
+     */
+    private function modelLacksTags(string $model): bool
+    {
+        try {
+            return ! method_exists(new $model(), 'syncTagsWithType');
+        } catch (Throwable) {
+            return true;
+        }
+    }
+
+    /**
+     * P17: `$model`'s own translatable attributes, per its REAL
+     * `Spatie\Translatable\HasTranslations::getTranslatableAttributes()` —
+     * detection by `method_exists`, the same pair
+     * `RecordForm::storedPaths()` gates its translation-aware read on, never
+     * a `spatie/laravel-translatable` import here. `[]` on any failure: a
+     * model that cannot even be constructed, or one that only carries an
+     * `'array'` cast on the same-named column (Banner's fixture) rather than
+     * the trait, answers "no translatable attributes" the same way
+     * `modelLacksTags()` fails closed.
+     *
+     * @return list<string>
+     */
+    private function translatableAttributesOf(string $model): array
+    {
+        try {
+            $instance = new $model();
+        } catch (Throwable) {
+            return [];
+        }
+
+        if (! method_exists($instance, 'getTranslations') || ! method_exists($instance, 'getTranslatableAttributes')) {
+            return [];
+        }
+
+        return $instance->getTranslatableAttributes();
+    }
+
+    /**
+     * P15: whether a Spatie tags field must be DROPPED from the schema
+     * entirely, rather than published — the one place this component's
+     * fail-closed treatment diverges from media's. Media locks the field
+     * `readOnly: true` because a client can still usefully show a stored
+     * file; a `tags` node has no such reading, no client honours `readOnly`
+     * on it, and the design spec's rule is "a control the write path would
+     * certainly refuse must not be drawn at all". So both shapes below read
+     * exactly like the unmapped-component branch above: warn, then `continue`
+     * past the node entirely, never into node()/config().
+     *
+     * Two independent gates, either one enough to drop the field:
+     *
+     *  - the model never registered `HasTags` (no `syncTagsWithType`) — the
+     *    write branch (Task 4) refuses the same shape in the request path,
+     *    this is the read-side half of the same ruling;
+     *  - `TagFields::typeOf()` came back null — a throwing or unresolvable
+     *    `->type()` gate, which leaves nothing for the serializer (Task 3)
+     *    to read tags BY.
+     *
+     * `$model === null` (a bare component-list unit test with no model
+     * argument) skips the first gate only, the same carve-out
+     * `modelLacksMedia()`'s call site already makes — the second gate is a
+     * fact about the component alone and applies regardless.
+     */
+    private function tagsFailClosed(object $component, string $resource, ?string $model): bool
+    {
+        $name = $this->nameOf($component, $resource);
+
+        if ($model !== null && $this->modelLacksTags($model)) {
+            $this->warnings->add(
+                $resource,
+                $name ?? $component::class,
+                'spatie tags field on a model without HasTags; dropping the field',
+            );
+
+            return true;
+        }
+
+        if (TagFields::typeOf($component) === null) {
+            $this->warnings->add(
+                $resource,
+                $name ?? $component::class,
+                'could not evaluate spatie tags `type`; dropping the field',
+            );
+
+            return true;
+        }
+
+        return false;
+    }
+
+    /**
      * Whether a repeater's relationship gate cannot ANSWER — the one
      * relationship condition that still earns `readOnly` since P9.
      *
@@ -584,7 +749,55 @@ final class SchemaWalker
     }
 
     /** @return array<string, mixed> */
-    private function config(object $component, string $type, string $resource, ?string $name, string $resourceKey, bool $insideRepeater = false): array
+    /**
+     * The navigation target behind a dotted entry's first segment, or null.
+     *
+     * @return array{resource: string, record: string}|null
+     */
+    private function entryTarget(?string $model, string|false $relation): ?array
+    {
+        if ($model === null || $relation === false || $relation === '') {
+            return null;
+        }
+
+        try {
+            $instance = new $model();
+
+            if (! method_exists($instance, $relation)) {
+                return null;
+            }
+
+            $related = $instance->{$relation}();
+
+            if (! $related instanceof BelongsTo) {
+                return null;
+            }
+
+            $relatedClass = get_class($related->getRelated());
+
+            $registry = new ResourceRegistry();
+            $owners = [];
+
+            foreach (array_keys($registry->mobileResources()) as $class) {
+                if ($class::getModel() === $relatedClass) {
+                    $owners[] = $class;
+                }
+            }
+
+            if (count($owners) !== 1) {
+                return null;
+            }
+
+            return [
+                'resource' => $registry->keyFor($owners[0]),
+                'record' => $relation.'.'.$related->getRelated()->getRouteKeyName(),
+            ];
+        } catch (Throwable) {
+            return null;
+        }
+    }
+
+    private function config(object $component, string $type, string $resource, ?string $name, string $resourceKey, bool $insideRepeater = false, ?string $model = null): array
     {
         // Upload is P6a; multiple is P12. A file field genuinely persists
         // (the upload endpoint hands back a path per file, the ordinary
@@ -606,6 +819,40 @@ final class SchemaWalker
             // render a stored value of unknown multiplicity as one path.
             if ($multiple === null) {
                 return ['readOnly' => true, 'multiple' => true];
+            }
+
+            // P14: a Spatie medialibrary upload adds two more fail-closed
+            // gates, both spec rulings — same shape as the throw above,
+            // because a client must never render a control the write path
+            // (RecordForm::saveRelations()'s media reconciler, Task 4) will
+            // certainly refuse.
+            if (MediaFields::isMediaUpload($component)) {
+                // The model never registered HasMedia at all — there is no
+                // media relation for the reconciler to write into. doctor
+                // (Task 5) names this same condition to explain why.
+                if ($model !== null && $this->modelLacksMedia($model)) {
+                    $this->warnings->add(
+                        $resource,
+                        $name ?? $component::class,
+                        'media upload on a model without HasMedia; publishing read-only',
+                    );
+
+                    return ['readOnly' => true, 'multiple' => $multiple];
+                }
+
+                // getCollection() threw — the collection name is what the
+                // reconciler and the read-path serializer both key media off
+                // of, so a gate that cannot answer must lock the field, not
+                // guess a collection.
+                if (MediaFields::collectionOf($component) === null) {
+                    $this->warnings->add(
+                        $resource,
+                        $name ?? $component::class,
+                        'could not evaluate `collection`, locking the field',
+                    );
+
+                    return ['readOnly' => true, 'multiple' => $multiple];
+                }
             }
 
             // read()'s fallback collapses "never configured" (a legitimate
@@ -726,20 +973,35 @@ final class SchemaWalker
             // commits on submit only, and prefixes/suffixes are presentation
             // this slice does not reproduce. Publishing a key the client
             // ignores is how a contract grows fields nothing honours.
-            $separator = $this->read($component, 'getSeparator', $resource, $name, 'separator');
             $suggestions = $this->read($component, 'getSuggestions', $resource, $name, 'suggestions', []);
 
-            return [
-                'separator' => is_string($separator) ? $separator : null,
-                // `array_values`, and string-only: getSuggestions() evaluates
-                // a host closure that may hand back an Arrayable's keyed
-                // array, and the contract's list must not arrive as a JSON
-                // object. A non-string entry is dropped rather than failing
-                // the field — a suggestion is a convenience, never a rule.
-                'suggestions' => is_array($suggestions)
-                    ? array_values(array_filter($suggestions, 'is_string'))
-                    : [],
-            ];
+            $config = [];
+
+            // A Spatie tags field saves through Filament's own relationship
+            // closure, never this package's delimited-string implode — it has
+            // no column to implode into at all (TagSeparators::in() already
+            // excludes it from that mirroring unconditionally). Publishing
+            // `getSeparator()` for it anyway would be a hint that LIES about
+            // what the write path does with the value: omit the key entirely
+            // rather than publish a truthful-looking `null`/string nobody
+            // should read. Key order kept `separator` first (unchanged) for
+            // every OTHER tags field, so no existing golden shifts.
+            if (! TagFields::isSpatieTags($component)) {
+                $separator = $this->read($component, 'getSeparator', $resource, $name, 'separator');
+                $config['separator'] = is_string($separator) ? $separator : null;
+            }
+
+            // `array_values`, and string-only: getSuggestions() evaluates a
+            // host closure that may hand back an Arrayable's keyed array, and
+            // the contract's list must not arrive as a JSON object. A
+            // non-string entry is dropped rather than failing the field — a
+            // suggestion is a convenience, never a rule. Published for every
+            // tags field regardless of type.
+            $config['suggestions'] = is_array($suggestions)
+                ? array_values(array_filter($suggestions, 'is_string'))
+                : [];
+
+            return $config;
         }
 
         if ($type === 'keyvalue') {

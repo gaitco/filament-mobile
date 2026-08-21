@@ -7,8 +7,9 @@ namespace Gait\FilamentMobile\Dashboard;
 use Filament\Widgets\ChartWidget;
 use Filament\Widgets\StatsOverviewWidget;
 use Filament\Widgets\Widget;
-use Gait\FilamentMobile\Introspection\SafeEvaluator;
-use Gait\FilamentMobile\Introspection\WalkWarnings;
+use Gait\FilamentMobile\ResourceRegistry;
+use Gait\MobileCore\SafeEvaluator;
+use Gait\MobileCore\WalkWarnings;
 use Illuminate\Contracts\Support\Htmlable;
 use ReflectionMethod;
 use Throwable;
@@ -225,6 +226,18 @@ final class WidgetReader
                 'chart' => $this->numbers(
                     $this->evaluator->value(
                         fn () => $stat->getChart(), null, $class, 'stat', 'chart',
+                    ),
+                ),
+                // The mobile mirror of the stat's web ->url(): when that URL
+                // is an opted-in resource's index, the phone can navigate to
+                // the same place, so the key is published. Any other URL —
+                // external, an unopted resource, a custom page — is null:
+                // a web address means nothing to the app, and half a target
+                // is worse than none.
+                'resourceKey' => $this->resourceKeyForUrl(
+                    $this->evaluator->value(
+                        fn () => method_exists($stat, 'getUrl') ? $stat->getUrl() : null,
+                        null, $class, 'stat', 'url',
                     ),
                 ),
             ];
@@ -446,6 +459,53 @@ final class WidgetReader
         }
 
         return $numbers;
+    }
+
+    /**
+     * The mobile resource key whose index the given web URL points at, or
+     * null. Matched on the resource slug as a whole path suffix (query
+     * string ignored — list filters are not in the contract yet), never via
+     * `Resource::getUrl()`: that needs a registered panel, which a queue
+     * worker or an explicitly-configured test app does not have. A URL that
+     * names a foreign host resolves to null before any slug is considered —
+     * an external link that happens to end in `/articles` is not this
+     * panel's articles.
+     */
+    private function resourceKeyForUrl(mixed $url): ?string
+    {
+        if (! is_string($url) || $url === '') {
+            return null;
+        }
+
+        $host = parse_url($url, PHP_URL_HOST);
+        try {
+            if (is_string($host) && $host !== '' && $host !== request()->getHost()) {
+                return null;
+            }
+        } catch (Throwable) {
+            return null;
+        }
+
+        $path = rtrim((string) parse_url($url, PHP_URL_PATH), '/');
+        if ($path === '') {
+            return null;
+        }
+
+        $registry = new ResourceRegistry();
+        $bestKey = null;
+        $bestLength = 0;
+
+        foreach (array_keys($registry->mobileResources()) as $class) {
+            $slug = (string) $class::getSlug();
+            // A whole-segment suffix: '/admin/articles' matches slug
+            // 'articles', '/admin/sub-articles' must not.
+            if ($slug !== '' && str_ends_with($path, '/'.$slug) && strlen($slug) > $bestLength) {
+                $bestKey = $registry->keyFor($class);
+                $bestLength = strlen($slug);
+            }
+        }
+
+        return $bestKey;
     }
 
     private function warn(string $class, string $reason): void

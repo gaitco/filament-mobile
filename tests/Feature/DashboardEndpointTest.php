@@ -111,3 +111,22 @@ it('omits _warnings in production so a phone never receives diagnostics', functi
         ->assertOk()
         ->assertJsonMissingPath('_warnings');
 });
+
+it('publishes a resourceKey only for a stat whose url is this panel\'s own resource', function () {
+    config()->set('filament-mobile.resources', [
+        \Gait\FilamentMobile\Tests\Fixtures\Resources\CompanyResource::class,
+    ]);
+    config()->set('filament-mobile.widgets', [
+        \Gait\FilamentMobile\Tests\Fixtures\Widgets\LinkedStatsWidget::class,
+    ]);
+
+    $stats = $this->actingAs(makeUser('admin'))
+        ->getJson('/api/mobile-panel/dashboard')
+        ->assertOk()
+        ->json('widgets.0.stats');
+
+    // Same-host resource URL resolves; a foreign host ending in the same
+    // slug must not — an external link is not this panel's companies.
+    expect(array_column($stats, 'resourceKey'))->toBe(['companies', null, null])
+        ->and(array_column($stats, 'label'))->toBe(['Companies', 'Elsewhere', 'Plain']);
+});

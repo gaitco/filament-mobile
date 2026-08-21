@@ -6,6 +6,7 @@ namespace Gait\FilamentMobile\Introspection;
 
 use Filament\Forms\Components\RichEditor\Models\Contracts\HasRichContent;
 use Filament\Forms\Components\RichEditor\RichContentRenderer;
+use Gait\MobileCore\PlainText;
 use Throwable;
 
 /**

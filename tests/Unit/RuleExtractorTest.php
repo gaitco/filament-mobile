@@ -9,8 +9,8 @@ use Filament\Forms\Components\Toggle;
 use Filament\Schemas\Components\Section;
 use Filament\Schemas\Schema;
 use Gait\FilamentMobile\Introspection\SchemaWalker;
-use Gait\FilamentMobile\Introspection\WalkWarnings;
 use Gait\FilamentMobile\Validation\RuleExtractor;
+use Gait\MobileCore\WalkWarnings;
 
 /**
  * Flattens every field name SchemaWalker's node tree contains, recursing

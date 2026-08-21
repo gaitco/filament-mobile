@@ -5,7 +5,7 @@ declare(strict_types=1);
 use Filament\Forms\Components\DatePicker;
 use Filament\Forms\Components\DateTimePicker;
 use Gait\FilamentMobile\Introspection\SchemaWalker;
-use Gait\FilamentMobile\Introspection\WalkWarnings;
+use Gait\MobileCore\WalkWarnings;
 
 /**
  * Task 1 of P8: date bounds have never reached the client. `grep -rn minDate

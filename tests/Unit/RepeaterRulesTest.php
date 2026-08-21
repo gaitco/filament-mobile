@@ -10,12 +10,12 @@ use Filament\Forms\Components\Repeater;
 use Filament\Forms\Components\TextInput;
 use Filament\Schemas\Components\Section;
 use Filament\Schemas\Schema;
-use Gait\FilamentMobile\Tests\Fixtures\Models\Banner;
-use Illuminate\Support\Arr;
 use Gait\FilamentMobile\Introspection\ChildComponents;
+use Gait\FilamentMobile\Tests\Fixtures\Models\Banner;
 use Gait\FilamentMobile\Validation\RuleExtractor;
-use Gait\FilamentMobile\Write\SettledSchema;
 use Gait\FilamentMobile\Write\WritableNames;
+use Gait\MobileCore\SettledSchema;
+use Illuminate\Support\Arr;
 
 /**
  * P6c Task 2: a repeater is a leaf that also has children. RuleExtractor

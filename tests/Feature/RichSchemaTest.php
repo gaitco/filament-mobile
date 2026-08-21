@@ -4,8 +4,8 @@ declare(strict_types=1);
 
 use Filament\Schemas\Schema;
 use Gait\FilamentMobile\Introspection\SchemaWalker;
-use Gait\FilamentMobile\Introspection\WalkWarnings;
 use Gait\FilamentMobile\Tests\Fixtures\Resources\RichResource;
+use Gait\MobileCore\WalkWarnings;
 
 /**
  * P6e Task 2: the walker refines `text_entry` to `rich_entry` on either half

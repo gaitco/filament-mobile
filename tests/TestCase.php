@@ -6,6 +6,7 @@ namespace Gait\FilamentMobile\Tests;
 
 use Gait\FilamentMobile\FilamentMobileServiceProvider;
 use Gait\FilamentMobile\Tests\Fixtures\Models\Post;
+use Gait\FilamentMobile\Tests\Fixtures\Models\SpatieTag;
 use Gait\FilamentMobile\Tests\Fixtures\Models\User;
 use Gait\FilamentMobile\Tests\Fixtures\Policies\PostPolicy;
 use Gait\FilamentMobile\Tests\Fixtures\Resources\BannerResource;
@@ -13,6 +14,8 @@ use Gait\FilamentMobile\Tests\Fixtures\Resources\PostResource;
 use Gait\FilamentMobile\Tests\Fixtures\Resources\SecretResource;
 use Illuminate\Support\Facades\Gate;
 use Orchestra\Testbench\TestCase as Orchestra;
+use Spatie\MediaLibrary\MediaLibraryServiceProvider;
+use Spatie\Tags\TagsServiceProvider;
 
 abstract class TestCase extends Orchestra
 {
@@ -34,6 +37,13 @@ abstract class TestCase extends Orchestra
             \Filament\Widgets\WidgetsServiceProvider::class,
             \Filament\FilamentServiceProvider::class,
             FilamentMobileServiceProvider::class,
+            // spatie/laravel-medialibrary is a dev-only dependency (P14): its
+            // provider is registered here, not by auto-discovery, same as
+            // every other package above under Testbench.
+            MediaLibraryServiceProvider::class,
+            // spatie/laravel-tags is a dev-only dependency (P15), registered
+            // the same way.
+            TagsServiceProvider::class,
         ];
     }
 
@@ -55,6 +65,11 @@ abstract class TestCase extends Orchestra
         $app['config']->set('auth.providers.users.model', User::class);
 
         Gate::policy(Post::class, PostPolicy::class);
+
+        // P15: spatie/laravel-tags' own tag model is remapped onto the
+        // fixture-only `SpatieTag` (table `spatie_tags`) — the existing
+        // plain fixture `Tag` model keeps the `tags` table it already owns.
+        $app['config']->set('tags.tag_model', SpatieTag::class);
 
         $this->defineDatabaseConnection($app);
     }

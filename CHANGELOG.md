@@ -1,5 +1,175 @@
 # Changelog
 
+## 0.8.2 — 2026-08-21
+
+- Internal core extracted to `gait/laravel-mobile-core` (namespace
+  `Gait\MobileCore`), inlined as `src-core/` in the public snapshot; host-facing
+  API unchanged.
+
+- **P17: the manual `spatie/laravel-translatable` convention's merge
+  guarantee is now real, and the schema tells a client enough to render
+  locale chips.** `RecordForm::storedPaths()` was supposed to preserve every
+  unsubmitted dotted-locale value on a partial write, but on a genuine
+  `HasTranslations` model `getAttribute()` returns the current locale's
+  string, not the locale map, so the `is_array()` guard silently preserved
+  nothing — masked until now only by Spatie's own model-layer merge. Fixed
+  by reading a translatable attribute through `getTranslations()` instead,
+  behind the same `method_exists` gate `RecordSerializer::read()` already
+  uses. Two new, purely additive schema keys, both absent on an old server:
+  `panel.locales` (the official plugin's `getDefaultLocales()`, else
+  `config('filament-mobile.locales')`, else absent — never `[]`) and a
+  dotted leaf's `translatable: true` when its head attribute is one of the
+  model's own `getTranslatableAttributes()`. `filament-mobile:doctor` gained
+  one informational line naming an undotted field on a translatable
+  attribute — the official plugin's own shape, where mobile edits only the
+  panel's current locale. Zero golden drift by construction: no fixture
+  behind `laravel-panel.json` uses the real trait or either new key. See the
+  "Translatable" README section and
+  `docs/superpowers/specs/2026-08-21-p17-translatable-design.md`.
+
+- **P16: `spatie/laravel-sluggable` slug fields work as-is — no special
+  handling exists or is needed.** `HasSlug` hooks the model's own
+  `creating`/`updating` events, not the form layer, so a slug `TextInput`
+  publishes and writes like any other plain field. A pinning test
+  (`tests/Feature/SluggableTest.php`) locks in the vendor's three documented
+  semantics through the real write endpoints: a changed slug is kept, an
+  empty one is generated from the source field, and an unchanged slug
+  resubmitted alongside a changed source field is regenerated. See the
+  "Sluggable" README section and
+  `docs/superpowers/specs/2026-08-21-p16-sluggable-design.md` for the
+  `disabled: true` publishing idea this refutes.
+
+- **P14: `spatie/laravel-medialibrary` fields and entries work on mobile.**
+  `SpatieMediaLibraryFileUpload` and `SpatieMediaLibraryImageEntry` were
+  mapped by name only — the upload endpoint stored a loose file no media row
+  referenced, the field was `disabled: true` from Filament's own
+  `dehydrated(false)`, and a media-backed value always serialised `null`.
+  All three are fixed:
+  - **Editable again.** A Spatie upload is now classified relationship-saved
+    (`FieldPersistence::savesViaRelationship()`, the `CheckboxList`/`Repeater`
+    convention), which short-circuits the never-persist rule and admits its
+    name through `WritableNames`.
+  - **A flat `<field>.__media` sibling**, the `.__rich` pattern verbatim:
+    `RecordSerializer::withMediaPaths()` writes uuid-token values (a
+    `List<String>` for a multiple field, a `String` for a single one — the
+    P12 invariant, unchanged) plus one `{uuid, url, thumbUrl, name, size,
+    mime}` entry per media item, ordered as the collection orders them.
+    `thumbUrl` is the `thumb` conversion's URL when the collection declares
+    one, else `null`; both URLs come from medialibrary's own `getUrl()`,
+    never a `Storage::url()` guess. A genuinely empty collection publishes
+    `[]`; a model without `HasMedia`, a non-media path, or an old server
+    omit the key entirely. The sibling appears on the record endpoint, both
+    write responses, relation rows, and list rows when a card slot
+    (`leadingImage()`, unchanged signature) is bound to the media path —
+    never on `/schema`.
+  - **Minted-path-validated wholesale reconciliation on save**, in
+    `RecordForm::saveRelations()`, this package's own deterministic
+    reconciler rather than Filament's Livewire-coupled closure: a submitted
+    existing media uuid is kept, a submitted stored path from the upload
+    endpoint is consumed (`addMediaFromDisk()->toMediaCollection()`), an
+    existing item the submission omits is deleted, an unmentioned field is
+    untouched, and a present `[]` clears the collection — the P12
+    multi-file model, verbatim. A path is only accepted for consumption
+    when it is the shape the upload endpoint actually mints — a crafted
+    string is refused, not consumed. A uuid belonging to another
+    record/collection 422s keyed to the field, and a request naming more
+    than one medialibrary field reconciles all of them together atomically:
+    one field 422ing never leaves another already applied.
+  - **Gated on `HasMedia`**, `method_exists`/FQCN detection only — no
+    runtime dependency, `spatie/laravel-medialibrary` is a **dev**
+    dependency. A Spatie component on a model without `HasMedia`, or a
+    throwing `collection()` closure, publishes `readOnly: true` — fail-closed,
+    the same shape a throwing constraint closure already gets.
+  - **Three `doctor` diagnostics**, informational only: a media component on
+    a model without `HasMedia`; a media component whose name collides with a
+    real column (the media pass would overwrite the column's value at that
+    key); a card slot bound to a media path on a model without `HasMedia`
+    (the slot always publishes `null`).
+  - **Testing**: `spatie/laravel-medialibrary` added to `require-dev`; a
+    `Gallery` fixture model plus resources covering single/multiple/entry
+    fields, the column-collision case, and the media-less case; Pest
+    coverage for the walker, the serializer sibling on every endpoint, the
+    full reconciliation matrix (keep/add/delete/clear/untouched, foreign-uuid
+    422, cross-field atomicity), attribute-array exclusion, and all three
+    doctor diagnostics. A new generated golden, `contract/media-record.json`,
+    through the real record endpoint — `record-payload.json` stays
+    media-free by design, the `panel.json`/`direction` precedent.
+  - See the [Medialibrary](README.md#medialibrary) section for the full wire
+    shape, reconciliation rules, and known weaknesses (no curation UI beyond
+    the file field, `SpatieMediaLibraryImageColumn` on relation cards stays
+    unsupported).
+
+- **P15: `filament/spatie-laravel-tags-plugin`'s `SpatieTagsInput` works on
+  mobile as the existing `tags` node — zero new wire shape, zero Dart
+  changes.** Previously unmapped (dropped with a warning), and the escape
+  hatch of mapping it to `tags` by hand in config would have targeted a
+  write at a column that does not exist.
+  - **Editable, relation-saved.** Classified `savesViaRelationship()`
+    (`TagFields`, the `MediaFields` FQCN pattern), so `dehydrated(false)`'s
+    never-persist rule is short-circuited and the name is admitted through
+    `WritableNames`, same as a Spatie media field.
+  - **Names on every serialize seam.** `RecordSerializer::withTagPaths()`
+    publishes the attached tag names as a plain `List<String>` — `$record->
+    tags` for the default any-type gate, `tagsWithType($type)` for a
+    declared `->type()` — on the record endpoint, both write responses, and
+    card-bound-only list/relation rows, eager-loaded (`->with('tags')`) the
+    same way media avoids an N+1.
+  - **Wholesale sync on write**, through Filament's own
+    `saveRelationshipsUsing()` closure (`syncTagsWithType()` / any-type
+    sync) — not this package's own reconciler, unlike media: `[]` clears,
+    an unmentioned or `null` field is untouched. An any-type sync is
+    wholesale over the ENTIRE relation, typed tags included — an any-type
+    `[]` clears typed tags too, and an any-type field's value is every tag
+    name regardless of type. Enforced before the sync with a field-keyed
+    `422`: every element must be a non-empty, non-whitespace string (a
+    non-string would otherwise reach Filament's own `findOrCreate()` and
+    `500`, a whitespace-only one would mint an indistinguishable-from-empty
+    tag), and `->required()` refuses an empty list on update AND (final
+    review) an absent field on create — relation-write names carry no
+    Laravel rule of their own, so nothing else enforces it. Media's own
+    `->required()` gained the same create-only absence check.
+  - **No separator participation, even declared.** A Spatie field has no
+    column to implode into, so `TagSeparators::in()` excludes it
+    unconditionally and `SchemaWalker` omits the `separator` key from its
+    published `config` entirely, rather than publish an answer nothing
+    honours.
+  - **Fails closed, not `readOnly`.** A model without `HasTags`, or an
+    unresolvable `->type()` gate, drops the field from `/schema` with a
+    warning instead of publishing it disabled — no client renders a usable
+    control off `readOnly: true` on a `tags` node. The write path refuses
+    the same two shapes independently (defence in depth against a crafted
+    request naming a field the walker never published). Final review: the
+    edit-form projection (`show()`'s prefill half) now passes the model to
+    the walker too, closing the one path where a fail-closed drop was
+    missed (and the record's real relation could otherwise leak through).
+  - **Card-bound list/relation rows no longer 500 on a traitless model.**
+    `cardMediaPaths()`/`cardTagPaths()` are schema-only and said nothing
+    about whether the model actually has `HasMedia`/`HasTags`; the eager
+    load itself (`->with('media')`/`->with('tags')`) now checks the trait
+    directly, on both the list endpoint and the relation endpoint — the
+    same fix applied symmetrically to the P14 medialibrary case.
+  - **Three `doctor` diagnostics**, informational: a `SpatieTagsInput` on a
+    model without `HasTags`; one whose name collides with a real column;
+    a card slot bound to a Spatie tags path on a model without `HasTags`.
+  - **Known weakness, stated:** per-tag `nestedRecursiveRules` (e.g.
+    `max:20`) are not enforced for a Spatie-backed field, unlike the plain
+    `TagsInput` case.
+  - **Caveat, stated:** `getSuggestions()` queries the entire tag table,
+    per field, per `/schema` request — unbounded, matching the web panel's
+    own cost, noted beside `Medialibrary`'s equivalent caveats.
+  - **Testing**: `spatie/laravel-tags` and
+    `filament/spatie-laravel-tags-plugin` added to `require-dev`; an
+    `Article`/`SpatieTag` fixture pair (tags remapped onto `spatie_tags` to
+    avoid colliding with the existing plain `Tag` fixture); Pest coverage
+    for the walker mapping and fail-closed drop, the separator exclusion,
+    the serializer on every seam plus an eager-load query-count assertion,
+    the write round-trip (any-type and typed sync, clear, untouched,
+    required, non-string-element 422, stale-relation freshness, the
+    crafted-request traitless-model case), and all three doctor
+    diagnostics. No new golden — no new wire shape exists to pin.
+  - See the [Spatie tags](README.md#spatie-tags) section for the full write
+    semantics and known weakness.
+
 ## 0.8.1 — 2026-08-19
 
 No changes to the package. Released to exercise the tag-triggered release

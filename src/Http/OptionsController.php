@@ -5,15 +5,15 @@ declare(strict_types=1);
 namespace Gait\FilamentMobile\Http;
 
 use Filament\Schemas\Schema;
-use Gait\FilamentMobile\Authorizer;
 use Gait\FilamentMobile\Introspection\ChildComponents;
 use Gait\FilamentMobile\Introspection\ComponentTypeMap;
 use Gait\FilamentMobile\Introspection\FormDefaults;
 use Gait\FilamentMobile\Introspection\HeadlessSchemaHost;
-use Gait\FilamentMobile\Introspection\WalkWarnings;
 use Gait\FilamentMobile\ResourceRegistry;
-use Gait\FilamentMobile\Write\SettledSchema;
 use Gait\FilamentMobile\Write\WritableNames;
+use Gait\MobileCore\Authorizer;
+use Gait\MobileCore\SettledSchema;
+use Gait\MobileCore\WalkWarnings;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;

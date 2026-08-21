@@ -5,13 +5,15 @@ declare(strict_types=1);
 namespace Gait\FilamentMobile;
 
 use BackedEnum;
+use Filament\Facades\Filament;
 use Filament\Schemas\Schema;
 use Filament\Support\Contracts\HasLabel;
 use Gait\FilamentMobile\Introspection\HeadlessSchemaHost;
 use Gait\FilamentMobile\Introspection\RelationDiscovery;
-use Gait\FilamentMobile\Introspection\SafeEvaluator;
 use Gait\FilamentMobile\Introspection\SchemaWalker;
-use Gait\FilamentMobile\Introspection\WalkWarnings;
+use Gait\MobileCore\Authorizer;
+use Gait\MobileCore\SafeEvaluator;
+use Gait\MobileCore\WalkWarnings;
 use Illuminate\Contracts\Auth\Authenticatable;
 use Illuminate\Database\Eloquent\Model;
 use Throwable;
@@ -44,24 +46,37 @@ final class PanelSchemaBuilder
             $resources[] = $this->resource($class, $mobile, $walker, $user);
         }
 
+        $panel = [
+            'id' => 'mobile',
+            'title' => config('app.name'),
+            'locale' => app()->getLocale(),
+            // Filament's own answer, from the same `layout.direction` key
+            // its web panel lays itself out with — so the phone and the
+            // panel agree by construction rather than by this package
+            // maintaining a locale table it would have to keep current.
+            //
+            // The `filament-panels` namespace, NOT `filament::`: measured,
+            // `filament::layout.direction` does not resolve and returns
+            // the raw key, while `filament-panels::` returns 'ltr'/'rtl'.
+            // The two are one character class apart and the wrong one
+            // fails silently, leaving every panel stuck on ltr.
+            'direction' => self::direction(),
+        ];
+
+        // P17: additive only. `null` means neither source could answer —
+        // never publish an empty list, which a client would read as "this
+        // panel declared zero locales" rather than "this panel said
+        // nothing". See `locales()` below for the plugin → config → absent
+        // order.
+        $locales = self::locales();
+
+        if ($locales !== null) {
+            $panel['locales'] = $locales;
+        }
+
         return [
             'version' => 1,
-            'panel' => [
-                'id' => 'mobile',
-                'title' => config('app.name'),
-                'locale' => app()->getLocale(),
-                // Filament's own answer, from the same `layout.direction` key
-                // its web panel lays itself out with — so the phone and the
-                // panel agree by construction rather than by this package
-                // maintaining a locale table it would have to keep current.
-                //
-                // The `filament-panels` namespace, NOT `filament::`: measured,
-                // `filament::layout.direction` does not resolve and returns
-                // the raw key, while `filament-panels::` returns 'ltr'/'rtl'.
-                // The two are one character class apart and the wrong one
-                // fails silently, leaving every panel stuck on ltr.
-                'direction' => self::direction(),
-            ],
+            'panel' => $panel,
             'resources' => $resources,
         ];
     }
@@ -91,6 +106,82 @@ final class PanelSchemaBuilder
         }
 
         return $direction === 'rtl' ? 'rtl' : 'ltr';
+    }
+
+    /**
+     * `panel.locales`: the panel's declared translation locales, flat and
+     * ordered as declared — a client treats this as chip ORDERING only, the
+     * chips themselves come from the form's own fields.
+     *
+     * Two sources, tried in order, never merged:
+     *
+     *  - the official `filament/spatie-laravel-translatable-plugin`, when
+     *    registered on the resolved panel (`hasPlugin()` guards `getPlugin()`,
+     *    which throws for a plugin that was never registered — the same
+     *    `hasPlugin`-then-`getPlugin` shape `ResourceRegistry` already uses to
+     *    reach the panel);
+     *  - `config('filament-mobile.locales')`, the host declaration for a
+     *    panel built on this package's own manual dotted-field convention
+     *    (`caption.ar`/`caption.en`), with no plugin at all.
+     *
+     * `null` — never `[]` — when neither answers, or answers with something
+     * that is not a flat list of strings: a dotted field name is not
+     * evidence of a locale, and this method never guesses one from it.
+     *
+     * The whole plugin lookup is one fail-closed `try/catch`, the same
+     * shape `direction()` uses: no panel registered, Filament not booted, or
+     * a plugin whose shape changed all degrade to the config fallback
+     * instead of a 500.
+     *
+     * @return list<string>|null
+     */
+    private static function locales(): ?array
+    {
+        try {
+            $panel = Filament::getCurrentOrDefaultPanel();
+
+            if ($panel !== null && $panel->hasPlugin('spatie-laravel-translatable')) {
+                $plugin = $panel->getPlugin('spatie-laravel-translatable');
+
+                if (method_exists($plugin, 'getDefaultLocales')) {
+                    $fromPlugin = self::localeList($plugin->getDefaultLocales());
+
+                    if ($fromPlugin !== null) {
+                        return $fromPlugin;
+                    }
+                }
+            }
+        } catch (Throwable) {
+            // Fall through to the config source below.
+        }
+
+        return self::localeList(config('filament-mobile.locales'));
+    }
+
+    /**
+     * `$value` published as a `list<string>` only if it already is one — a
+     * validated shape, not a coercion. Anything else (not an array, a keyed
+     * map, a non-string entry, or an EMPTY list) answers `null` so the caller
+     * falls through rather than publishing a locale that was never really
+     * declared — the "never `[]`" contract line applies here too: an empty
+     * declared list is not evidence of a locale any more than no declaration
+     * at all.
+     *
+     * @return list<string>|null
+     */
+    private static function localeList(mixed $value): ?array
+    {
+        if (! is_array($value) || ! array_is_list($value) || $value === []) {
+            return null;
+        }
+
+        foreach ($value as $locale) {
+            if (! is_string($locale)) {
+                return null;
+            }
+        }
+
+        return $value;
     }
 
     /** @return array<string, mixed> */
@@ -155,6 +246,31 @@ final class PanelSchemaBuilder
 
         if ($group !== null) {
             $block['group'] = $group;
+        }
+
+        // The web sidebar's count badge, published verbatim: the value is
+        // whatever string the panel renders (usually a count) and the colour
+        // is the same semantic vocabulary stats and card badges use. Absent
+        // rather than null when the resource declares none — same rule as
+        // `group`. The badge closure runs the panel's own query; a throwing
+        // badge loses the badge, never the resource.
+        try {
+            $badgeValue = $class::getNavigationBadge();
+        } catch (Throwable) {
+            $badgeValue = null;
+        }
+
+        if ($badgeValue !== null && $badgeValue !== '') {
+            try {
+                $badgeColor = $class::getNavigationBadgeColor();
+            } catch (Throwable) {
+                $badgeColor = null;
+            }
+
+            $block['badge'] = [
+                'value' => (string) $badgeValue,
+                'color' => is_string($badgeColor) ? $badgeColor : null,
+            ];
         }
 
         return $block;

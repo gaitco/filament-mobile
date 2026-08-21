@@ -1,0 +1,45 @@
+{
+    "data": {
+        "id": 1,
+        "name": "Trip",
+        "cover": "uuid-1",
+        "photos": [
+            "uuid-2",
+            "uuid-3"
+        ],
+        "cover.__media": [
+            {
+                "uuid": "uuid-1",
+                "url": "https://media.test/uuid-1/c.jpg",
+                "thumbUrl": "https://media.test/uuid-1/thumb-c.jpg",
+                "name": "c.jpg",
+                "size": 100,
+                "mime": "image/png"
+            }
+        ],
+        "photos.__media": [
+            {
+                "uuid": "uuid-2",
+                "url": "https://media.test/uuid-2/a.jpg",
+                "thumbUrl": "https://media.test/uuid-2/thumb-a.jpg",
+                "name": "a.jpg",
+                "size": 100,
+                "mime": "image/png"
+            },
+            {
+                "uuid": "uuid-3",
+                "url": "https://media.test/uuid-3/b.jpg",
+                "thumbUrl": "https://media.test/uuid-3/thumb-b.jpg",
+                "name": "b.jpg",
+                "size": 100,
+                "mime": "image/png"
+            }
+        ]
+    },
+    "permissions": {
+        "view": true,
+        "update": true,
+        "delete": true
+    },
+    "actions": []
+}

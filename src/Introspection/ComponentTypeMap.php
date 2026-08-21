@@ -57,6 +57,15 @@ final class ComponentTypeMap
         // on the wire in every case; a configured `separator` changes only
         // what Filament stores, never what the client sends.
         'Filament\\Forms\\Components\\TagsInput' => 'tags',
+        // P15: `filament/spatie-laravel-tags-plugin`'s field extends
+        // TagsInput and inherits its getSeparator()/getSuggestions()/
+        // HasNestedRecursiveValidationRules — same `tags` node, same
+        // config() branch, zero new wire shape. It saves through Filament's
+        // own relationship closure rather than a column (see
+        // FieldPersistence::savesViaRelationship()'s TagFields early
+        // return), and TagSeparators::in() excludes it unconditionally
+        // because it has no column for a separator to implode into.
+        'Filament\\Forms\\Components\\SpatieTagsInput' => 'tags',
         // DANGER, measured in vendor: the setters are `editableKeys()` /
         // `editableValues()`, but the getters are NOT named after them —
         // they are `canEditKeys()` / `canEditValues()`, alongside

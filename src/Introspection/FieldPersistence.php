@@ -180,6 +180,29 @@ final class FieldPersistence
      */
     public static function savesViaRelationship(object $component): bool
     {
+        // A medialibrary upload persists through the media relation this
+        // package's own reconciler drives (P14), not through Filament's
+        // saveRelationships() — but it earns the same ruling
+        // CheckboxList/Repeater already get: editable despite its literal
+        // dehydrated(false), and excluded from the mass-assignment array by
+        // every caller keyed off this predicate. Checked BEFORE the
+        // getRelationship() guard below because SpatieMediaLibraryFileUpload
+        // has no getRelationship() at all and would otherwise short-circuit
+        // false here first.
+        if (MediaFields::isMediaUpload($component)) {
+            return true;
+        }
+
+        // P15: a Spatie tags field saves through Filament's own
+        // `saveRelationshipsUsing` closure (syncTagsWithType / any-type
+        // sync), never through `getRelationship()` — it has none, and would
+        // otherwise short-circuit false at the guard below, exactly the
+        // shape the media early-return above exists for. Its literal
+        // `dehydrated(false)` earns the same editable-despite-that ruling.
+        if (TagFields::isSpatieTags($component)) {
+            return true;
+        }
+
         if (! method_exists($component, 'getRelationship')) {
             return false;
         }

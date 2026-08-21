@@ -4,9 +4,9 @@ declare(strict_types=1);
 
 use Filament\Schemas\Schema;
 use Gait\FilamentMobile\Introspection\SchemaWalker;
-use Gait\FilamentMobile\Introspection\WalkWarnings;
 use Gait\FilamentMobile\Tests\Fixtures\Models\Banner;
 use Gait\FilamentMobile\Tests\Fixtures\Resources\RepeaterProblemResource;
+use Gait\MobileCore\WalkWarnings;
 
 /**
  * P6c Task 1: the walker publishes a repeater. Before this, `Repeater` was

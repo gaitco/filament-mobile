@@ -5,7 +5,7 @@ declare(strict_types=1);
 use Filament\Forms\Components\Radio;
 use Filament\Schemas\Schema;
 use Gait\FilamentMobile\Introspection\SchemaWalker;
-use Gait\FilamentMobile\Introspection\WalkWarnings;
+use Gait\MobileCore\WalkWarnings;
 
 /**
  * P7 Task 1: `Radio` becomes the walker's first mapped type since P6 closed.

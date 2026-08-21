@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 use Filament\Forms\Components\Slider;
 use Gait\FilamentMobile\Introspection\SchemaWalker;
-use Gait\FilamentMobile\Introspection\WalkWarnings;
+use Gait\MobileCore\WalkWarnings;
 
 /**
  * P10 Task 2: `Slider` becomes a mapped type, `slider` on the wire.

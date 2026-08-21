@@ -17,7 +17,8 @@
                         9,
                         15,
                         22
-                    ]
+                    ],
+                    "resourceKey": null
                 },
                 {
                     "label": "Refunds",
@@ -25,7 +26,8 @@
                     "description": null,
                     "descriptionIcon": null,
                     "color": null,
-                    "chart": null
+                    "chart": null,
+                    "resourceKey": null
                 }
             ]
         },

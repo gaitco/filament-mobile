@@ -31,6 +31,22 @@
             <directory>tests/Feature</directory>
         </testsuite>
     </testsuites>
+    <php>
+        <!--
+            Several tests assert exact 403/422 bodies (e.g. UploadEndpointTest's
+            bodyless-403 comparisons) — assertions that only hold with Laravel's
+            debug exception rendering OFF, since debug-on embeds a full stack
+            trace (file/line) that differs per call site even for "the same"
+            refusal. That was always an implicit assumption of an unset
+            APP_DEBUG resolving to false; it broke when a vendor upgrade
+            (testbench-core, via the gitignored composer.lock) changed how an
+            unset APP_DEBUG resolves. Pinned explicitly so the suite's actual
+            requirement no longer depends on a vendor default. `force`, so a
+            shell-exported APP_DEBUG=true (rather than merely unset) can't
+            reintroduce the same failure.
+        -->
+        <env name="APP_DEBUG" value="false" force="true"/>
+    </php>
     <source>
         <include>
             <directory>src</directory>
