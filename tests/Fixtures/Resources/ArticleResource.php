@@ -6,6 +6,7 @@ namespace Gait\FilamentMobile\Tests\Fixtures\Resources;
 
 use Filament\Forms\Components\SpatieTagsInput;
 use Filament\Forms\Components\TextInput;
+use Filament\Infolists\Components\SpatieTagsEntry;
 use Filament\Infolists\Components\TextEntry;
 use Filament\Resources\Resource;
 use Filament\Schemas\Schema;
@@ -24,6 +25,17 @@ use Gait\FilamentMobile\Tests\Fixtures\Models\Article;
  * later P15 tasks' walker/serializer/write tests instantiate against, so
  * they stay as declared here. At the end of Task 1 the walker still DROPS
  * both fields (unmapped until Task 2's `TagFields` classification lands).
+ *
+ * The infolist's `SpatieTagsEntry` pair mirrors the host panel exactly (see
+ * this slice's spec: `ArticleResource::infolist()` declares
+ * `SpatieTagsEntry::make('tags')` and `SpatieTagsEntry::make('topics')
+ * ->type('topics')`, and the detail screen showed neither before
+ * `ComponentTypeMap` learned the class). Same names as the form on purpose —
+ * every subclass below (`RequiredSpatieTagsArticleResource`,
+ * `SeparatedSpatieTagsArticleResource`, `CardedTagsArticleResource`) inherits
+ * this infolist unchanged, and `TagFields::pathsIn()`'s union folds an entry
+ * and an input sharing a name into one path, so no existing assertion in
+ * `SpatieTagsSerializationTest`/`TagsWriteTest`/`SpatieTagsWriteTest` shifts.
  */
 class ArticleResource extends Resource
 {
@@ -50,6 +62,8 @@ class ArticleResource extends Resource
     {
         return $schema->components([
             TextEntry::make('title'),
+            SpatieTagsEntry::make('tags'),
+            SpatieTagsEntry::make('topics')->type('topics'),
         ]);
     }
 }

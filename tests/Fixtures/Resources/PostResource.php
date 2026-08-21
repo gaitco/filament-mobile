@@ -16,6 +16,7 @@ use Filament\Forms\Components\TimePicker;
 use Filament\Forms\Components\Toggle;
 use Filament\Infolists\Components\IconEntry;
 use Filament\Infolists\Components\ImageEntry;
+use Filament\Infolists\Components\SpatieTagsEntry;
 use Filament\Infolists\Components\TextEntry;
 use Filament\Resources\Resource;
 use Filament\Schemas\Components\Fieldset;
@@ -164,6 +165,15 @@ class PostResource extends Resource
                 ->boolean()
                 ->visible(fn (Get $get) => $get('hide_published') !== true),
             ImageEntry::make('cover_url'),
+            // `tags_entry`, exercised here for the same reason CheckboxList
+            // is above: this is the one fixture ContractSnapshotTest's
+            // "exercises every component type" test walks, and Post has no
+            // HasTags trait to satisfy — a `tags_entry` node never fails
+            // closed the way a form `SpatieTagsInput` does (no write path to
+            // protect on a read-only entry), so it publishes regardless.
+            // Column-less on purpose, like `tags`/`views` above: exists to
+            // be walked, not written or read against a real record.
+            SpatieTagsEntry::make('labels'),
         ]);
     }
 }

@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 use Filament\Forms\Components\SpatieTagsInput;
+use Filament\Infolists\Components\SpatieTagsEntry;
 use Gait\FilamentMobile\Introspection\SchemaWalker;
 use Gait\FilamentMobile\Tests\Fixtures\Models\Article;
 use Gait\FilamentMobile\Tests\Fixtures\Models\Company;
@@ -65,6 +66,60 @@ it('drops a spatie tags field on a model without HasTags, with a warning naming 
         ->and($warnings->all())->toHaveCount(1)
         ->and($warnings->all()[0]['component'])->toBe('tags')
         ->and($warnings->all()[0]['reason'])->toContain('HasTags');
+});
+
+/**
+ * The premise `TagWalkerTest`'s original docblock stated ("no infolist tags
+ * entry equivalent") is what this task refutes: `SpatieTagsEntry` is mapped
+ * to its own `tags_entry` type now (ComponentTypeMap), which — unlike
+ * `SpatieTagsInput`'s `tags` mapping — needs no special case in
+ * `walkNodes()` at all: it never fails closed the way a form field does
+ * (there is no write path to protect), so it flows through the ordinary
+ * entry node/config path exactly like `text_entry`/`image_entry` do. `config`
+ * carries neither `separator` nor `suggestions` — those are the `tags`
+ * branch's own keys, and `config()`'s default fallthrough for every other
+ * entry type is `[]`.
+ */
+it('publishes a spatie tags entry as an ordinary tags_entry node, any and typed', function () {
+    $nodes = (new SchemaWalker(new WalkWarnings()))->walk([
+        SpatieTagsEntry::make('tags'),
+        SpatieTagsEntry::make('topics')->type('topics'),
+    ], 'ArticleResource', 'articles', Article::class);
+
+    expect($nodes)->toHaveCount(2)
+        ->and($nodes[0]['type'])->toBe('tags_entry')
+        ->and($nodes[0]['name'])->toBe('tags')
+        ->and($nodes[0]['label'])->toBe('Tags')
+        // An empty `config` is never published (node()'s `$config !== []`
+        // gate) — the same absence every other config-less entry
+        // (text_entry, image_entry) gets.
+        ->and($nodes[0])->not->toHaveKey('config')
+        ->and($nodes[1]['type'])->toBe('tags_entry')
+        ->and($nodes[1]['name'])->toBe('topics')
+        ->and($nodes[1]['label'])->toBe('Topics')
+        ->and($nodes[1])->not->toHaveKey('config');
+});
+
+/**
+ * Unlike a `SpatieTagsInput`, a `SpatieTagsEntry` on a model without HasTags
+ * is NOT dropped: `walkNodes()`'s fail-closed branch is gated on
+ * `$type === 'tags'`, which a `tags_entry` node never is. There is no write
+ * path to protect on a read-only entry, and the entry's own `getState()`
+ * degrades to an empty list gracefully (measured in vendor) — the same
+ * graceful-empty ruling `RecordSerializer::withTagPaths()`'s
+ * `method_exists($record, 'tagsWithType')` gate already applies to the
+ * record-bound read.
+ */
+it('does not drop a spatie tags entry on a model without HasTags', function () {
+    $warnings = new WalkWarnings();
+
+    $nodes = (new SchemaWalker($warnings))->walk([
+        SpatieTagsEntry::make('tags'),
+    ], 'CompanyResource', 'companies', Company::class);
+
+    expect($nodes)->toHaveCount(1)
+        ->and($nodes[0]['type'])->toBe('tags_entry')
+        ->and($warnings->all())->toBeEmpty();
 });
 
 it('drops a spatie tags field whose type() closure throws, with a warning naming it', function () {

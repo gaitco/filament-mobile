@@ -56,6 +56,17 @@ it('maps an icon entry onto boolean_entry, a type the contract actually has', fu
         ->and(ComponentTypeMap::for(IconEntry::make('a')))->toBe('boolean_entry');
 });
 
+it('maps a Spatie tags entry onto its own tags_entry type by class name', function () {
+    // Matched by name, not instanceof, the same reasoning as the media entry
+    // row above: this package never depends on the tags plugin to support a
+    // panel that uses it. Its own type, not folded into `text_entry` or
+    // `badge_entry`, because its wire value is a List<String>.
+    expect(ComponentTypeMap::forClassName(
+        'Filament\\Infolists\\Components\\SpatieTagsEntry',
+    ))->toBe('tags_entry')
+        ->and(ComponentTypeMap::types())->toContain('tags_entry');
+});
+
 it('maps a Spatie media image entry onto image_entry by class name', function () {
     // Matched by name, not instanceof, so this package never has to depend on
     // the Spatie plugin to support a panel that uses it.

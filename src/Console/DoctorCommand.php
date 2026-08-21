@@ -11,6 +11,7 @@ use Gait\FilamentMobile\Dashboard\WidgetReader;
 use Gait\FilamentMobile\Introspection\ChildComponents;
 use Gait\FilamentMobile\Introspection\ComponentTypeMap;
 use Gait\FilamentMobile\Introspection\FieldPersistence;
+use Gait\FilamentMobile\Introspection\HeadlessTableHost;
 use Gait\FilamentMobile\Introspection\MediaFields;
 use Gait\FilamentMobile\Introspection\RelationDiscovery;
 use Gait\FilamentMobile\Introspection\RichContent;
@@ -24,6 +25,7 @@ use Illuminate\Console\Command;
 use Illuminate\Contracts\Auth\Authenticatable;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
 use Throwable;
 
@@ -76,6 +78,8 @@ final class DoctorCommand extends Command
         $mediaProblems = $this->mediaProblems($mobile, $builder);
         $tagProblems = $this->tagProblems($mobile, $builder);
         $translatableProblems = $this->translatableProblems($mobile, $builder);
+        $reorderProblems = $this->reorderProblems($mobile);
+        $labelProblems = $this->labelProblems($mobile, $builder);
 
         $this->exposure($registry, $mobile, $panel);
         $this->section('Unsupported components', [...$unsupported, ...$this->pasteLines($unsupported)]);
@@ -89,6 +93,14 @@ final class DoctorCommand extends Command
         $this->section('Medialibrary', $mediaProblems);
         $this->section('Spatie tags', $tagProblems);
         $this->section('Translatable', $translatableProblems);
+
+        if ($reorderProblems !== []) {
+            $this->section('Reordering', $reorderProblems);
+        }
+
+        if ($labelProblems !== []) {
+            $this->section('Labels', $labelProblems);
+        }
 
         // A resource nobody could walk is a hole in the gate, not a clean bill
         // of health: CI reads the exit code, not the prose above it.
@@ -981,6 +993,162 @@ final class DoctorCommand extends Command
 
             $this->walkTranslatableComponents(ChildComponents::of($component), $resourceName, $translatable, $lines);
         }
+    }
+
+    /**
+     * P18 Task 5: three reordering findings, all informational — a resource
+     * declaration is legal, this slice simply does not support it on mobile
+     * (pivots), or the declaration's config needs aligning (missing column,
+     * Spatie mismatch).
+     *
+     *  - a reorder column that does not exist on the model's table;
+     *  - a reorder column that differs from the model's Spatie sortable
+     *    order_column_name when the model implements Sortable;
+     *  - a reorderable on a pivot column (dotted).
+     *
+     * Read the raw column off the table via `HeadlessTableHost`, not
+     * `ReorderDeclaration::for()` — the latter returns null for dotted
+     * columns, which is exactly what diagnostic (c) must catch.
+     *
+     * @param  array<class-string, MobileResource>  $mobile
+     * @return list<string>
+     */
+    private function reorderProblems(array $mobile): array
+    {
+        $lines = [];
+
+        foreach ($mobile as $class => $resource) {
+            $short = class_basename($class);
+            $model = new ($class::getModel())();
+            $table = HeadlessTableHost::tableFor($class);
+            $column = $table->getReorderColumn();
+
+            // No reorderable declaration — nothing to check.
+            if (blank($column)) {
+                continue;
+            }
+
+            // Diagnostic (c): a reorderable on a pivot column.
+            if (str_contains($column, '.')) {
+                $lines[] = $short . ': reorderable on a pivot column [' . $column . '] — not offered on mobile';
+
+                continue;
+            }
+
+            // Diagnostic (a): column does not exist on the table.
+            if (! Schema::hasColumn($model->getTable(), $column)) {
+                $lines[] = $short . ': table reorderable on [' . $column . '] but ' . $model->getTable() . ' has no such column';
+
+                continue;
+            }
+
+            // Diagnostic (b): model has Spatie sortable with a different column.
+            if (method_exists($model, 'determineOrderColumnName')) {
+                $sortableColumn = $model->determineOrderColumnName();
+
+                if ($sortableColumn !== $column) {
+                    $lines[] = $short . ': table reorders [' . $column . '] but the model\'s Spatie sortable column is [' . $sortableColumn . ']';
+                }
+            }
+        }
+
+        return $lines;
+    }
+
+    /**
+     * The nudge this slice adds: a dotted leaf (`category.name`) with no
+     * `->label()` call publishes Filament's own name-derived default — the
+     * LAST segment only (`afterLast('.')`, measured in vendor/filament/
+     * schemas/src/Components/Concerns/HasLabel.php's Field/Entry overrides —
+     * `getLabel()` itself, so this reads the exact label the client would
+     * show, never a re-derivation of it). "Name" for `category.name` reads
+     * fine on a desktop grid beside its section heading, but a phone list has
+     * no such heading to supply the missing "Category" context.
+     *
+     * `hasCustomLabel()` (the trait's own accessor — `$this->label !==
+     * null`) is the one honest signal: name-sniffing would flag a field whose
+     * author DID call `->label('Name')` deliberately, which is not a defect.
+     * Informational only, like `tagProblems()`/`mediaProblems()` — a dotted
+     * name with a default label still walks and serves fine, so this is
+     * never folded into `$actionable`.
+     *
+     * @param  array<class-string, MobileResource>  $mobile
+     * @return list<string>
+     */
+    private function labelProblems(array $mobile, PanelSchemaBuilder $builder): array
+    {
+        $lines = [];
+
+        foreach ($mobile as $class => $resource) {
+            $short = class_basename($class);
+
+            foreach (['form', 'infolist'] as $method) {
+                $this->walkLabelComponents($builder->schemaComponents($class, $method), $short, $lines);
+            }
+        }
+
+        return $lines;
+    }
+
+    /**
+     * @param  iterable<mixed>  $components
+     * @param  list<string>  $lines
+     */
+    private function walkLabelComponents(iterable $components, string $resourceName, array &$lines): void
+    {
+        foreach ($components as $component) {
+            if (! is_object($component) || ComponentTypeMap::isSkipped($component)) {
+                continue;
+            }
+
+            $name = $this->componentName($component);
+
+            if (is_string($name) && str_contains($name, '.') && ! $this->hasCustomLabel($component)) {
+                $label = $this->componentLabel($component);
+
+                if ($label !== null) {
+                    $lines[] = $resourceName . '.' . $name . ": label defaults to '" . $label
+                        . "' — set ->label() to disambiguate on the phone";
+                }
+            }
+
+            $this->walkLabelComponents(ChildComponents::of($component), $resourceName, $lines);
+        }
+    }
+
+    /**
+     * Fails closed toward SILENCE, not toward the nudge: a component this
+     * package cannot ask (no `hasCustomLabel()` at all) or whose evaluation
+     * throws answers `true` here — "has a custom label" — so it is never
+     * flagged. A false positive on a component this section cannot actually
+     * read would be worse than a missed one.
+     */
+    private function hasCustomLabel(object $component): bool
+    {
+        if (! method_exists($component, 'hasCustomLabel')) {
+            return true;
+        }
+
+        try {
+            return (bool) $component->hasCustomLabel();
+        } catch (Throwable) {
+            return true;
+        }
+    }
+
+    private function componentLabel(object $component): ?string
+    {
+        if (! method_exists($component, 'getLabel')) {
+            return null;
+        }
+
+        try {
+            $label = $component->getLabel();
+        } catch (Throwable) {
+            return null;
+        }
+
+        return is_string($label) ? $label : null;
     }
 
     private function resolves(Model $model, string $segment): bool

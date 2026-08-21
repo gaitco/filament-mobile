@@ -101,6 +101,145 @@ translatable plugin, or a `filament-mobile.locales` config value, so both
 keys staying absent from both goldens is a structural guarantee, not a
 maintenance step someone can forget.
 
+## Reordering (`resource.reorder`)
+
+P18 adds one more resource-level key, present only on a resource that opted
+in on the web panel's own table:
+
+```jsonc
+{
+  "key": "slides",
+  ...
+  "sorts": [],
+  "reorder": { "column": "position", "direction": "asc" }
+}
+```
+
+`reorder` mirrors exactly three things the web panel's `table()` already
+declares — `->reorderable('column', condition: bool|Closure, direction:
+'asc'|'desc')` and `->authorizeReorder(fn (...) => bool)` — never a second
+permission model or a mobile-only reorder toggle. The key is present **if
+and only if**:
+
+- the table declares a reorder column (`->reorderable('column')`), **and**
+- that column is **not dotted**. A dotted column (`'pivot.position'`) is
+  Filament's *other* reorder branch — a `BelongsToMany` pivot reorder — which
+  is a P18 non-goal, so a pivot-reordered resource reads exactly like one
+  with no reorder column at all, and **is never offered on mobile**, **and**
+- `->reorderable()`'s own `condition` (default: `true`) evaluates `true`,
+  **and**
+- `authorizeReorder()` (default: always authorized, same as Filament's own
+  default) evaluates `true` for the requesting user.
+
+**Absent — never `null`, never `{ "enabled": false }` — whenever any of
+those three is not true.** This is the same fail-closed shape `group` and
+the navigation `badge` already use above: an old client that has never
+heard of `reorder` ignores the unknown key exactly as it ignores any other,
+so absence degrades safely, while a published-but-disabled key would need
+every client, forever, to remember to check it. A client sees the key at
+all only for a resource it may drag-reorder for *this* user; it never has
+to ask permission a second time before issuing the write the list-drag
+endpoint exposes (P18 Tasks 3–4 define that flag and endpoint).
+
+`laravel-panel.json` carries one reorderable fixture resource so this key's
+shape is exercised end to end, not merely asserted in isolation; `panel.json`
+predates P18 and — the same "server before this feature shipped" role every
+other additive key's golden plays above — carries no `reorder` key at all.
+
+### The list endpoint's `?reorder=1` flag
+
+A resource whose schema carries `reorder` (above) also serves its full,
+reorder-ordered list off the SAME endpoint the normal paginated list uses —
+`GET {resource}?reorder=1`, exactly the string `'1'`; any other value
+(`0`, `yes`, absent) is the ordinary paginated list, unchanged.
+
+`?reorder=1` mirrors Filament's own reorder-mode table query, not a new
+policy:
+
+- **All records, unpaginated**, ordered by the declared reorder column and
+  direction — never `per_page`-sliced. `meta` still carries all four of the
+  normal list's keys, synthesized rather than read off a paginator:
+  `{current_page: 1, last_page: 1, per_page: <count>, total: <count>}` —
+  `<count>` is the full result count, so a client that does not branch on
+  `reorder` still renders a coherent single page.
+- **`sort`/`direction` are ignored, silently — never a 422**, even for an
+  unknown `sort` key. Filament discards the table's sort column outright the
+  moment it is reordering; this endpoint does the same by never evaluating
+  `sort`/`direction` at all in this mode.
+- **`search` is still applied.** Filament keeps its search filter active
+  while reordering — reorder mode narrows the same way the normal list does,
+  it just does not paginate or honour `sort`.
+
+**`422 "Resource [{key}] is not reorderable."`** whenever the resource's
+`reorder` schema key would be absent for this request — no declared reorder
+column (or a dotted pivot column, P18's non-goal), `->reorderable()`'s own
+`condition` evaluates `false`, or `authorizeReorder()` evaluates `false` for
+the requesting user. A client should only ever send
+`?reorder=1` for a resource whose `/schema` response carried `reorder` for
+this session; sending it for one that didn't is the same misuse
+`ListQuery`'s unknown-sort-key abort already answers with a 422 elsewhere on
+this endpoint.
+
+### The write endpoint — `POST {resource}/reorder`
+
+The drag itself. Body:
+
+```jsonc
+{ "order": ["<routeKey>", "<routeKey>", "…"] }
+```
+
+`order` names every dragged row's **route key** (the value the client already
+holds — the same one `data.id` publishes; the serializer publishes `data.id`
+through the model's own `getRouteKeyName()`, so `data.id` IS the route key,
+not merely equal to it by coincidence), in the row's NEW top-to-bottom
+position, first entry first. The server mirrors Filament's own `reorderTable()`
+(`Filament\Tables\Concerns\CanReorderRecords::reorderTable()`) for the
+non-pivot branch: `callBeforeReordering($order)`, one `UPDATE … CASE …`
+inside a single database transaction (`whereIn($keyName,
+$order)->update([$column => <case expression>])`), then
+`callAfterReordering($order)` — run *outside* that transaction, exactly where
+Filament itself calls it, so a hook that throws there never rolls back a
+write that has already committed. A `direction: 'desc'` resource (declared on
+the `reorder` schema key, above) reverses the CASE assignment the same way
+Filament's own builder does: the first posted key gets the HIGHEST position,
+not the lowest.
+
+Exactly one `UPDATE` runs on the happy path — no per-row writes, no N+1.
+That `UPDATE` runs through Eloquent's `Builder::update()`, which stamps
+`updated_at` on every touched row the same as Filament's own web reorder
+does — not a side effect this package adds.
+
+**`200 {"message": "Reordered."}`** on success. This is a plain,
+package-owned string, not a mirror of Filament's own reorder notification
+text: that text fires through a Livewire `Notification`, which this package
+does not host headlessly.
+
+Rejection table:
+
+| Condition | Status | Body |
+|---|---|---|
+| Resource key names nothing this panel serves | 404 | `"No mobile resource [{key}]."` |
+| Resource exists but declares no reorder column at all (or a dotted pivot column) | 404 | **The same message as the row above**, byte-for-byte — a resource that merely isn't reorderable must be indistinguishable from one that doesn't exist, or a caller could probe resource keys by watching this 404 turn into something else |
+| A reorder column IS declared, but `->reorderable()`'s own `condition` evaluates `false`, or `authorizeReorder()` evaluates `false`, for the requesting user | 403 | — Both fold into Filament's own single `isReorderable()` gate (`filled(column) && evaluate($condition) && isReorderAuthorized()`), which this package reads through its public surface only, so a disabled `condition` and a denying `authorizeReorder()` are indistinguishable from each other — same as they are to Filament's own web panel — never confused with the 404 above, since the column itself IS declared |
+| `order` missing, or not a JSON array | 422 | — |
+| `order` is `[]` | 422 | — |
+| `order` contains anything other than an int or string (bools included — a bool would otherwise survive `whereIn()` as `0`/`1` and silently match a real row) | 422 | — |
+| `order` contains a duplicate route key | 422 | — |
+| `order` names a route key outside the resource's own query — soft-deleted, scoped away by a global scope or tenancy, or never existed | 422 | `"Unknown record in order."` — and **nothing is written**: this check runs before the transaction opens |
+| The `UPDATE` itself fails (e.g. a misconfigured reorder column) | 500 | Laravel's own error response; the transaction rolls back, so every row's position is exactly what it was before the request |
+
+Every check above runs **before** the transaction opens, membership included
+— the only query capable of writing anything is the single `UPDATE`, and it
+either fully commits or (the 500 row) fully rolls back. There is no partial
+reorder.
+
+If the model's route key name differs from its primary key name, the server
+resolves every submitted route key to its primary key first — through the
+resource's own base query, which is also what performs the membership check
+above — and runs the CASE update on primary keys, the same way Filament's own
+Livewire table does (its sortable list is keyed by model key, not by a
+custom route key).
+
 ## Reading `hidden` and `disabled` as a client
 
 `hidden` does not mean the same thing on the two endpoints, and only one of
@@ -585,6 +724,46 @@ server and surfaces only in the `422`.)
 **Not on the wire, deliberately:** `splitKeys`, `tagPrefix` and `tagSuffix`.
 A tag commits on submit only, and prefixes/suffixes are presentation this
 contract does not reproduce.
+
+## The tags_entry component (read-only)
+
+A `Filament\Infolists\Components\SpatieTagsEntry::make('tags')` (from
+`filament/spatie-laravel-tags-plugin`) publishes its own `tags_entry` node —
+not folded into `tags`, because it never accepts input:
+
+```jsonc
+{
+  "type": "tags_entry",
+  "name": "tags",
+  "label": "Tags"
+}
+```
+
+**Same wire shape as the form's `tags` field: a `List<String>` of tag names,
+never a delimited string.** No `config` at all — a `tags_entry` carries
+neither `separator` (it has no column to implode into; Filament's own
+`saveRelationshipsUsing` writes a Spatie tags field, never a dehydrated
+string) nor `suggestions` (there is nothing to type into a read-only
+control). A client renders it exactly like the ordinary display of a `tags`
+field's value, minus the editing affordance — the existing chip/badge
+treatment, with no delete control.
+
+**Type-scoped the same way the form field is.** `SpatieTagsEntry::type('x')`
+scopes the published list to that Spatie tag type, the same `->type()` gate
+`SpatieTagsInput` reads; the default (no `->type()` call) publishes every tag
+regardless of type, an `AllTagTypes` instance under the hood.
+
+**The record payload folds a form field and an infolist entry sharing one
+name into a single path.** A resource whose form declares
+`SpatieTagsInput::make('tags')` and whose infolist *also* declares
+`SpatieTagsEntry::make('tags')` publishes exactly one `tags` key on the
+record — the same union `tags`'s form-only precedent no longer holds now
+that an infolist half exists (see this contract's `## The tags field`
+section, which the union applies to identically). An infolist-only path —
+one the form never declares at all — still reaches the record payload: the
+server folds both containers before serialising, the same two-halves
+treatment already established for medialibrary's `image_entry`/`file`
+pair.
 
 ## The keyvalue field
 

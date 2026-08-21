@@ -10,12 +10,14 @@ use Filament\Schemas\Schema;
 use Filament\Support\Contracts\HasLabel;
 use Gait\FilamentMobile\Introspection\HeadlessSchemaHost;
 use Gait\FilamentMobile\Introspection\RelationDiscovery;
+use Gait\FilamentMobile\Introspection\ReorderDeclaration;
 use Gait\FilamentMobile\Introspection\SchemaWalker;
 use Gait\MobileCore\Authorizer;
 use Gait\MobileCore\SafeEvaluator;
 use Gait\MobileCore\WalkWarnings;
 use Illuminate\Contracts\Auth\Authenticatable;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Http\Request;
 use Throwable;
 use UnitEnum;
 
@@ -28,8 +30,18 @@ final class PanelSchemaBuilder
         $this->warnings = new WalkWarnings();
     }
 
-    /** @return array<string, mixed> */
-    public function build(?Authenticatable $user): array
+    /**
+     * `$request` is optional — DoctorCommand builds from a console command
+     * with no HTTP request to thread, and every existing test builds with
+     * only a user — and `reorder` (below) needs the real `Request` object,
+     * not just its resolved user, because `ReorderDeclaration::authorizes()`
+     * rebinds it around evaluating the table's `authorizeReorder()` closure.
+     * No request means no `reorder` key, the same fail-closed absence an
+     * unauthorized request gets.
+     *
+     * @return array<string, mixed>
+     */
+    public function build(?Authenticatable $user, ?Request $request = null): array
     {
         $this->warnings = new WalkWarnings();
         $walker = new SchemaWalker($this->warnings);
@@ -43,7 +55,7 @@ final class PanelSchemaBuilder
                 continue;
             }
 
-            $resources[] = $this->resource($class, $mobile, $walker, $user);
+            $resources[] = $this->resource($class, $mobile, $walker, $user, $request);
         }
 
         $panel = [
@@ -190,6 +202,7 @@ final class PanelSchemaBuilder
         MobileResource $mobile,
         SchemaWalker $walker,
         ?Authenticatable $user,
+        ?Request $request,
     ): array {
         $model = $class::getModel();
         $short = class_basename($class);
@@ -246,6 +259,29 @@ final class PanelSchemaBuilder
 
         if ($group !== null) {
             $block['group'] = $group;
+        }
+
+        // P18: the FIRST schema-path read of the resource's own table —
+        // every other key above comes off `mobile()`. Permitted here because
+        // `HeadlessTableHost` builds the same headless `Table` instance
+        // `doctor` already does, never a live Livewire component. Absent
+        // (never `null`, never `enabled:false`) when the table declares no
+        // reorder column, the column is dotted (a pivot reorder — out of
+        // scope), or `authorizeReorder()` denies this request: an old client
+        // ignores an unknown key, so "absent" degrades safely, while a
+        // published-but-disabled key would need every client to branch on it
+        // forever. `$request` is null only for a caller with none to thread
+        // (DoctorCommand's console context) — no request, no key, same as an
+        // unauthorized one.
+        if (
+            $request !== null
+            && ($reorder = ReorderDeclaration::for($class)) !== null
+            && ReorderDeclaration::authorizes($class, $request)
+        ) {
+            $block['reorder'] = [
+                'column' => $reorder->column,
+                'direction' => $reorder->direction,
+            ];
         }
 
         // The web sidebar's count badge, published verbatim: the value is

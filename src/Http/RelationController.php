@@ -456,8 +456,9 @@ final class RelationController
     /**
      * The child resource's own tags paths, intersected with the relation's
      * published CARD — the tags read-path twin of `cardMediaPaths()` above,
-     * for the same reason. Form-only: there is no infolist tags entry (see
-     * `MobilePanelController::formProjection()`'s docblock).
+     * for the same reason, and folded the same way: `SpatieTagsEntry` is
+     * mapped now (`tags_entry`), so a relation row must not miss a
+     * card-bound tags field that only the child's infolist declares.
      *
      * @param  class-string|null  $class
      * @return array<string, array{any: bool, type: ?string}>
@@ -468,7 +469,10 @@ final class RelationController
             return [];
         }
 
-        $paths = TagFields::pathsIn($this->builder->schemaComponents($class, 'form'));
+        $paths = [
+            ...TagFields::pathsIn($this->builder->schemaComponents($class, 'infolist')),
+            ...TagFields::pathsIn($this->builder->schemaComponents($class, 'form')),
+        ];
 
         return array_intersect_key($paths, array_flip($card->fieldPaths()));
     }

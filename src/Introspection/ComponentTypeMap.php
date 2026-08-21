@@ -146,6 +146,16 @@ final class ComponentTypeMap
         'Filament\\Infolists\\Components\\IconEntry' => 'boolean_entry',
         'Filament\\Infolists\\Components\\ImageEntry' => 'image_entry',
         'Filament\\Infolists\\Components\\SpatieMediaLibraryImageEntry' => 'image_entry',
+        // The infolist twin `Filament\Forms\Components\SpatieTagsInput` never
+        // had (P15's stated premise, since refuted): it extends TextEntry and
+        // shares getType()/isAnyTagTypeAllowed() with the field, but its
+        // `getState()` returns a `List<String>` of tag names rather than a
+        // string, so it earns its own type rather than folding into
+        // `text_entry`/`badge_entry`. Read-only — no separator, no
+        // suggestions, the same minimal config every other entry publishes
+        // (SchemaWalker::config()'s default `[]` fallthrough). See TagFields
+        // for the shared `isSpatieTags()`/`typeOf()` classification.
+        'Filament\\Infolists\\Components\\SpatieTagsEntry' => 'tags_entry',
     ];
 
     /**

@@ -6,6 +6,7 @@ use Gait\FilamentMobile\Tests\Fixtures\Models\Article;
 use Gait\FilamentMobile\Tests\Fixtures\Resources\ArticleResource;
 use Gait\FilamentMobile\Tests\Fixtures\Resources\BannerResource;
 use Gait\FilamentMobile\Tests\Fixtures\Resources\CardedTagsArticleResource;
+use Gait\FilamentMobile\Tests\Fixtures\Resources\InfolistOnlyTagsArticleResource;
 use Gait\FilamentMobile\Tests\Fixtures\Resources\PostResource;
 use Gait\FilamentMobile\Tests\Fixtures\Resources\SecretResource;
 use Illuminate\Support\Facades\DB;
@@ -22,6 +23,7 @@ beforeEach(function (): void {
         SecretResource::class,
         ArticleResource::class,
         CardedTagsArticleResource::class,
+        InfolistOnlyTagsArticleResource::class,
     ]);
 });
 
@@ -99,6 +101,23 @@ it('carries tags on list rows only when the card binds the field', function () {
     )->firstWhere('id', $article->id);
 
     expect($plainRow)->not->toHaveKey('tags');
+});
+
+it('publishes a tags_entry path the form never declares — proves the infolist fold', function () {
+    // InfolistOnlyTagsArticleResource declares `curated` on its INFOLIST
+    // alone, never on the form. Before MobilePanelController::show()'s
+    // formProjection()-plus-infolist fold, `tagPaths` was built from the
+    // form's components only, so this path walked and published on
+    // `/schema` but never appeared on a record payload at all.
+    $article = Article::create(['title' => 'Curated']);
+    $article->attachTags(['pick', 'of', 'the', 'week'], 'curated');
+
+    $data = $this->actingAs(makeUser('admin'))
+        ->getJson("/api/mobile-panel/infolist-only-tags-articles/{$article->id}")
+        ->assertOk()
+        ->json('data');
+
+    expect($data['curated'])->toEqualCanonicalizing(['pick', 'of', 'the', 'week']);
 });
 
 it('eager loads tags so the card-bound field does not N+1 on the list endpoint', function () {

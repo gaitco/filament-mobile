@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased
+
+- **P18: reorderable resources.** A resource whose Filament table declares
+  `->reorderable('column')` now publishes `reorder: {column, direction}` in
+  `/schema` — absent (never a flag) unless declared AND `authorizeReorder()`
+  passes for the requesting user. `GET {resource}?reorder=1` serves the full
+  unpaginated list in reorder order (search kept, sorts discarded — exactly as
+  Filament's own reorder mode), and `POST {resource}/reorder` with
+  `{"order": [ids]}` mirrors Filament's `reorderTable()` byte-for-byte: one
+  `UPDATE … CASE` in one transaction, positions 1..N reversed for `desc`, the
+  table's before/after hooks honoured. Spatie's `eloquent-sortable` is NOT
+  the capability and `setNewOrder()` is deliberately never called — the web
+  panel doesn't either. Pivot (`BelongsToMany`) reordering is not offered; the
+  doctor names it, along with a reorder column missing from the table or
+  disagreeing with the model's Spatie `order_column_name`.
+
 ## 0.8.2 — 2026-08-21
 
 - Internal core extracted to `gait/laravel-mobile-core` (namespace

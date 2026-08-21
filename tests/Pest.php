@@ -6,6 +6,7 @@ use Gait\FilamentMobile\Tests\Fixtures\Models\Banner;
 use Gait\FilamentMobile\Tests\Fixtures\Models\Company;
 use Gait\FilamentMobile\Tests\Fixtures\Models\Post;
 use Gait\FilamentMobile\Tests\Fixtures\Models\User;
+use Illuminate\Http\Request;
 
 uses(Gait\FilamentMobile\Tests\TestCase::class)->in('Unit', 'Feature');
 
@@ -106,6 +107,20 @@ function makeUser(string $name): User
         'name' => $name,
         'email' => $name . '@example.test',
     ]);
+}
+
+/**
+ * An authenticated `Request`, for a headless code path (`ReorderDeclaration::
+ * authorizes()`) that reads `request()->user()` from a Filament closure but
+ * has no HTTP kernel to build one through — `actingAs()` binds the guard for
+ * a real `getJson()` call, this binds a standalone `Request` the same way.
+ */
+function requestAs(User $user): Request
+{
+    $request = Request::create('/');
+    $request->setUserResolver(fn () => $user);
+
+    return $request;
 }
 
 function seedBanner(string $name = 'Banner', string $status = 'active', ?array $options = null): Banner

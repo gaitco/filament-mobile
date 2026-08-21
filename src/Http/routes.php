@@ -6,6 +6,7 @@ use Gait\FilamentMobile\Http\DashboardController;
 use Gait\FilamentMobile\Http\MobilePanelController;
 use Gait\FilamentMobile\Http\OptionsController;
 use Gait\FilamentMobile\Http\RelationController;
+use Gait\FilamentMobile\Http\ReorderController;
 use Gait\FilamentMobile\Http\StateController;
 use Gait\FilamentMobile\Http\UploadController;
 use Illuminate\Support\Facades\Route;
@@ -35,6 +36,9 @@ Route::prefix(config('filament-mobile.prefix'))
         // A literal segment, like `state` and `options` — above the record
         // wildcard so `upload` is never captured as a record id.
         Route::post('{resource}/upload', UploadController::class)->name('upload');
+        // Same reason, same placement: `reorder` is a literal, not a record
+        // id. P18 Task 4's write endpoint.
+        Route::post('{resource}/reorder', ReorderController::class)->name('reorder');
         // Above {resource}/{record} so a POST cannot be shadowed by it.
         Route::post('{resource}', [MobilePanelController::class, 'store'])->name('store');
         Route::get('{resource}', [MobilePanelController::class, 'index'])->name('index');

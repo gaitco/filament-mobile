@@ -15,6 +15,7 @@ use Gait\FilamentMobile\Introspection\ComponentTypeMap;
 use Gait\FilamentMobile\Introspection\FieldPersistence;
 use Gait\FilamentMobile\Introspection\FormDefaults;
 use Gait\FilamentMobile\Introspection\MediaFields;
+use Gait\FilamentMobile\Introspection\ReorderDeclaration;
 use Gait\FilamentMobile\Introspection\RichContent;
 use Gait\FilamentMobile\Introspection\RichContentAdapter;
 use Gait\FilamentMobile\Introspection\SchemaWalker;
@@ -48,7 +49,7 @@ final class MobilePanelController
 
     public function schema(Request $request): JsonResponse
     {
-        $document = $this->builder->build($request->user());
+        $document = $this->builder->build($request->user(), $request);
 
         // Hashed BEFORE `_warnings` is attached, deliberately: warnings are
         // dev-only and not part of the contract, so folding them in would
@@ -185,11 +186,16 @@ final class MobilePanelController
             $query->with('tags');
         }
 
+        // `search` is applied to both modes below — Filament keeps its search
+        // filter active while reordering (there is no "discard search" branch
+        // in CanSortRecords/HasRecords, unlike sort). Only `sort`/`direction`
+        // are reorder-mode casualties, applied further down in the normal-list
+        // branch only.
         ListQuery::applySearch($query, ListQuery::stringQuery($request, 'search'), $mobile->getSearchable());
-        ListQuery::applySort($query, $request, $mobile->getSorts(), $mobile->getDefaultSortKey(), $mobile->getDefaultSortDirection());
 
-        $records = $query->paginate(config('filament-mobile.per_page'));
-
+        // One serializer either way — index() always serialises through the
+        // card, reorder mode included, so there is exactly one place this gets
+        // constructed rather than one per branch.
         $serializer = (new RecordSerializer(
             $card,
             (new ($class::getModel())())->getRouteKeyName(),
@@ -199,6 +205,73 @@ final class MobilePanelController
         ))
             ->withMediaPaths($cardMediaPaths)
             ->withTagPaths($cardTagPaths);
+
+        // Exactly the string '1' — anything else (`0`, `yes`, absent) is the
+        // ordinary paginated list below. Reorder mode is opt-in per request,
+        // never inferred from the resource merely being reorderable.
+        if ($request->query('reorder') === '1') {
+            $declaration = ReorderDeclaration::for($class);
+
+            // Null (no reorder column, or a dotted pivot column — a P18
+            // non-goal, see ReorderDeclaration) OR the web panel's own
+            // authorizeReorder() closure refuses this user: one 422 either
+            // way, the same shape ListQuery's unknown-sort abort uses. A
+            // resource that never opted into reordering has no drag-to-reorder
+            // endpoint to serve, same as it has no `reorder` schema key.
+            abort_unless(
+                $declaration !== null && ReorderDeclaration::authorizes($class, $request),
+                422,
+                "Resource [{$resource}] is not reorderable.",
+            );
+
+            // Mostly mirrors Filament's own reorder-mode query, with one
+            // deliberate divergence called out below:
+            //
+            // - Sort is discarded, unconditionally — CanSortRecords.php:84-86
+            //   short-circuits applySortingToTableQuery() to
+            //   orderBy(reorderColumn, reorderDirection) the moment
+            //   isTableReordering() is true, before the table's own sort
+            //   column is even read. `sort`/`direction` on this request are
+            //   therefore never looked at, and an unknown `sort` key is not a
+            //   422 here — ListQuery::applySort() is simply never called.
+            // - The WHOLE list is served, unpaginated — HasRecords.php:171-176
+            //   takes the ->get() branch whenever isTableReordering() is true
+            //   and paginatedWhileReordering() is false. This package never
+            //   offers paginatedWhileReordering (a P18 non-goal), so only that
+            //   unpaginated half is mirrored.
+            // - ->reorder() runs first, and THIS is NOT what Filament does:
+            //   web's applySortingToTableQuery() (CanSortRecords.php:84-86)
+            //   only APPENDS orderBy(reorderColumn, reorderDirection) to
+            //   whatever getEloquentQuery() already ordered by, so a resource
+            //   with a default sort keeps that sort's ORDER BY precedence on
+            //   web — the reorder column merely breaks ties, and dragging a
+            //   row can visibly fail to move it. Calling ->reorder() first
+            //   clears that default sort, so mobile's reorder-mode list is
+            //   always ordered by the reorder column alone. A deliberate
+            //   divergence in mobile's favour, not a bug to match.
+            $records = $query->reorder()->orderBy($declaration->column, $declaration->direction)->get();
+
+            return response()->json([
+                'data' => array_map(
+                    static fn (Model $record): array => $serializer->serialize($record),
+                    $records->all(),
+                ),
+                // Synthesized, not read off a paginator — there isn't one.
+                // Same four keys as the normal list's meta, so a client that
+                // does not branch on `reorder` still renders a coherent
+                // single page: everything on it, page 1 of 1.
+                'meta' => [
+                    'current_page' => 1,
+                    'last_page' => 1,
+                    'per_page' => $records->count(),
+                    'total' => $records->count(),
+                ],
+            ]);
+        }
+
+        ListQuery::applySort($query, $request, $mobile->getSorts(), $mobile->getDefaultSortKey(), $mobile->getDefaultSortDirection());
+
+        $records = $query->paginate(config('filament-mobile.per_page'));
 
         return response()->json([
             'data' => array_map(
@@ -372,6 +445,16 @@ final class MobilePanelController
         // which is moot in practice: the same collection reads the same way
         // from either component.
         $form['mediaPaths'] = [...MediaFields::pathsIn($infolistComponents), ...$form['mediaPaths']];
+
+        // The form's own Spatie tags fields plus the infolist's read-only
+        // `SpatieTagsEntry` ones — the same fold `mediaPaths` just got above,
+        // for the same reason: a `SpatieTagsEntry::make('tags')` may name a
+        // path the form never declares at all (this task's whole point — the
+        // detail screen previously showed neither `tags` nor `topics`
+        // because `formProjection()`'s `tagPaths` was FORM-only). The form's
+        // declaration wins on a name both sides use, the same tie-break the
+        // media fold takes.
+        $form['tagPaths'] = [...TagFields::pathsIn($infolistComponents), ...$form['tagPaths']];
 
         $serializer = (new RecordSerializer(
             $mobile->getCard(),
@@ -779,10 +862,11 @@ final class MobilePanelController
      * shape `RichContent::entryNamesIn()`/`attributesFor()` already follow
      * for rich content.
      *
-     * `tagPaths` is this FORM's half of the record's tags union — there is no
-     * infolist counterpart (the plugin has no read-only tags entry, unlike
-     * media's `SpatieMediaLibraryImageEntry`), so unlike `mediaPaths` this is
-     * never folded with an infolist half in show().
+     * `tagPaths` is this FORM's half of the record's tags union — `show()`
+     * folds in the infolist's own `SpatieTagsEntry` paths beside it, the same
+     * two-halves shape `mediaPaths` above follows for
+     * `SpatieMediaLibraryImageEntry`. The premise this docblock used to state
+     * ("no infolist counterpart") is what this task refutes.
      *
      * @param  class-string  $class
      * @param  array<string, mixed>  $state
@@ -885,15 +969,24 @@ final class MobilePanelController
      * created or edited, and a thinner set here would have it disagree with
      * an immediate GET of the same record.
      *
-     * Form-only, unlike `mediaPathsFor()`: there is no infolist tags entry to
-     * fold in (see `formProjection()`'s docblock).
+     * Folds `infolist` and `form` like `mediaPathsFor()` does — the premise
+     * its old form-only comment stated ("no infolist tags entry exists") no
+     * longer holds: `SpatieTagsEntry` is mapped now (`tags_entry`), and
+     * `TagFields::isSpatieTags()` recognises it alongside the field. Same
+     * spread-and-overwrite union as `mediaPathsFor()`: a path present in
+     * both containers (an entry and an input sharing a name) collapses to
+     * one key, form winning on conflict — never two distinct sources of
+     * truth for what one path's `any`/`type` gate is.
      *
      * @param  class-string  $class
      * @return array<string, array{any: bool, type: ?string}>
      */
     private function tagPathsFor(string $class): array
     {
-        return TagFields::pathsIn($this->builder->schemaComponents($class, 'form'));
+        return [
+            ...TagFields::pathsIn($this->builder->schemaComponents($class, 'infolist')),
+            ...TagFields::pathsIn($this->builder->schemaComponents($class, 'form')),
+        ];
     }
 
     /**
@@ -923,15 +1016,18 @@ final class MobilePanelController
 
     /**
      * The resource's OWN tags paths, intersected with the CARD's whitelist —
-     * the same reasoning `cardMediaPaths()` gives, and form-only for the same
-     * reason `tagPathsFor()` is: there is no infolist tags entry.
+     * the same reasoning `cardMediaPaths()` gives, and folds `infolist` +
+     * `form` for the same reason `tagPathsFor()` now does.
      *
      * @param  class-string  $class
      * @return array<string, array{any: bool, type: ?string}>
      */
     private function cardTagPaths(string $class, MobileCard $card): array
     {
-        $paths = TagFields::pathsIn($this->builder->schemaComponents($class, 'form'));
+        $paths = [
+            ...TagFields::pathsIn($this->builder->schemaComponents($class, 'infolist')),
+            ...TagFields::pathsIn($this->builder->schemaComponents($class, 'form')),
+        ];
 
         return array_intersect_key($paths, array_flip($card->fieldPaths()));
     }

@@ -42,9 +42,20 @@ final class HeadlessTableHost
      */
     public static function flatActionsFor(string $resourceClass): array
     {
-        $table = $resourceClass::table(Table::make(new class extends TableComponent {}));
+        return self::tableFor($resourceClass)->getFlatActions();
+    }
 
-        return $table->getFlatActions();
+    /**
+     * The resource's declared `table()`, built headlessly — the same
+     * throwaway `TableComponent` host every caller in this class needs, so
+     * `Introspection/ReorderDeclaration.php` can read `->reorderable()`
+     * without importing `Filament\Tables\Table` itself.
+     *
+     * @param  class-string  $resourceClass
+     */
+    public static function tableFor(string $resourceClass): Table
+    {
+        return $resourceClass::table(Table::make(new class extends TableComponent {}));
     }
 
     /**

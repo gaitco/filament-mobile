@@ -5,14 +5,34 @@ declare(strict_types=1);
 use Gait\FilamentMobile\Introspection\ComponentTypeMap;
 use Gait\FilamentMobile\PanelSchemaBuilder;
 use Gait\FilamentMobile\ResourceRegistry;
+use Gait\FilamentMobile\Tests\Fixtures\Resources\BannerResource;
+use Gait\FilamentMobile\Tests\Fixtures\Resources\PostResource;
+use Gait\FilamentMobile\Tests\Fixtures\Resources\SecretResource;
+use Gait\FilamentMobile\Tests\Fixtures\Resources\SlideDescResource;
+use Illuminate\Http\Request;
 
 // Second golden file, not a rewrite of contract/panel.json. That one is P0's
 // hand-written example covering every v1 shape; this one is what Laravel
 // actually emits from real resources. Regenerate with UPDATE_SNAPSHOTS=1.
 
+// P18: SlideDescResource added to TestCase's shared default list, scoped to
+// THIS file only (same reasoning ArticleResource's docblock gives for
+// staying out of TestCase itself) — it declares no authorizeReorder()
+// closure, so it reads as authorized for anyone, anonymous request
+// included, and is the smallest fixture that puts a `reorder` key into the
+// golden without pulling in an admin-gated request.
+beforeEach(function () {
+    config()->set('filament-mobile.resources', [
+        PostResource::class,
+        BannerResource::class,
+        SecretResource::class,
+        SlideDescResource::class,
+    ]);
+});
+
 function snapshotDocument(): array
 {
-    return (new PanelSchemaBuilder(new ResourceRegistry()))->build(null);
+    return (new PanelSchemaBuilder(new ResourceRegistry()))->build(null, Request::create('/'));
 }
 
 it('matches the committed contract snapshot', function () {

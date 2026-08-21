@@ -375,6 +375,16 @@
                     "disabled": false,
                     "live": false,
                     "rules": []
+                },
+                {
+                    "type": "tags_entry",
+                    "name": "labels",
+                    "label": "Labels",
+                    "helperText": null,
+                    "hidden": false,
+                    "disabled": false,
+                    "live": false,
+                    "rules": []
                 }
             ]
         },
@@ -1801,6 +1811,38 @@
                 }
             ],
             "group": "Content"
+        },
+        {
+            "key": "slide-descs",
+            "labels": {
+                "singular": "slide",
+                "plural": "slides"
+            },
+            "permissions": {
+                "viewAny": true,
+                "view": true,
+                "create": true,
+                "update": true,
+                "delete": true
+            },
+            "recordKey": "id",
+            "card": {
+                "title": {
+                    "field": "title"
+                }
+            },
+            "search": {
+                "enabled": false
+            },
+            "sorts": [],
+            "filters": [],
+            "relations": [],
+            "form": [],
+            "infolist": [],
+            "reorder": {
+                "column": "position",
+                "direction": "desc"
+            }
         }
     ]
 }

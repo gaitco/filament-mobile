@@ -16,6 +16,18 @@ final class TagFields
     public const string TAGS_INPUT = 'Filament\\Forms\\Components\\SpatieTagsInput';
 
     /**
+     * The infolist twin: `SpatieTagsEntry` extends `TextEntry` (measured in
+     * vendor/filament/spatie-laravel-tags-plugin/src/Infolists/Components/
+     * SpatieTagsEntry.php) and shares `getType()`/`isAnyTagTypeAllowed()`
+     * with the field — same `AllTagTypes` default, same `->type('x')`
+     * override — so `typeOf()` below needs no branch of its own for it. The
+     * premise `isSpatieTags()`'s old single-FQCN shape encoded ("no infolist
+     * tags entry exists") no longer holds; see `MobilePanelController`'s
+     * `tagPathsFor()`/`cardTagPaths()` for the read-path fold this enables.
+     */
+    public const string TAGS_ENTRY = 'Filament\\Infolists\\Components\\SpatieTagsEntry';
+
+    /**
      * The plugin's own `AllTagTypes` marker class — never imported, matched
      * by name the same way `TAGS_INPUT` is. `SpatieTagsInput::setUp()`
      * unconditionally calls `$this->type(new AllTagTypes)`, so `getType()`
@@ -26,7 +38,7 @@ final class TagFields
 
     public static function isSpatieTags(object $component): bool
     {
-        return $component::class === self::TAGS_INPUT;
+        return in_array($component::class, [self::TAGS_INPUT, self::TAGS_ENTRY], true);
     }
 
     /**
